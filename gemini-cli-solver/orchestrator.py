@@ -685,9 +685,9 @@ async def process_task(
             continue
 
         attempts = result.get("attempts", [])
-        has_grid = any(a.get("grid") is not None for a in attempts)
-        if has_grid:
-            submitted_tests.add(ti)
+        for a in attempts:
+            if a.get("grid") is not None:
+                submitted_tests.add(a.get("test_index", ti))
         per_agent[agent_id] = {
             "test_index": ti,
             "attempts": [a["grid"] for a in attempts],

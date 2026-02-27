@@ -300,20 +300,18 @@ def _run_gemini_session(
     cwd: str,
     stdin_text: str | None = None,
     session_timeout: float = 10800,  # 3 hours default
-    idle_timeout: float = 120,  # kill if no output for 2 min
 ) -> tuple[list[str], int, str, dict[str, int]]:
     """Launch gemini CLI as a subprocess, read stream-json output, wait for exit.
 
-    Uses a reader thread + queue so we can enforce an idle timeout: if the CLI
-    produces no stdout for `idle_timeout` seconds, the process is killed and we
-    return whatever we have (likely empty — triggering the empty-session retry).
+    Uses a reader thread + queue so we can enforce a session timeout.
+    The process is allowed to run until it exits naturally or hits the
+    session timeout.
 
     Args:
         cmd_str: Shell command string to run (gemini invocation).
         cwd: Working directory.
         stdin_text: If provided, write to stdin then close (for --resume mode).
         session_timeout: Max seconds for the entire session (default: 3h).
-        idle_timeout: Kill process if no stdout line for this many seconds.
 
     Returns:
         (raw_lines, num_turns, stderr_text, token_stats)
@@ -379,17 +377,15 @@ def _run_gemini_session(
             }
 
     while True:
-        elapsed = time.time() - session_start
-        if elapsed > session_timeout:
+        remaining = session_timeout - (time.time() - session_start)
+        if remaining <= 0:
             proc.terminate()  # SIGTERM: give CLI a chance to emit final stats
             break
 
         try:
-            line = line_queue.get(timeout=idle_timeout)
+            line = line_queue.get(timeout=min(remaining, 60))
         except queue.Empty:
-            # No output for idle_timeout seconds — terminate the hung process
-            proc.terminate()  # SIGTERM: give CLI a chance to emit final stats
-            break
+            continue  # Check session timeout again
 
         if line is None:  # EOF — process closed stdout
             break
