@@ -12,6 +12,7 @@ Communication:
 import importlib.util
 import json
 import os
+import random
 import shlex
 import subprocess
 import sys
@@ -37,41 +38,20 @@ def emit_status(event: dict) -> None:
 GEMINI_MD = """\
 # ARC-AGI Puzzle Solver
 
-You are an expert at solving Abstract Reasoning Corpus (ARC) tasks by writing Python code.
-
 Read `task.json`. It has `train` (input/output pairs) and `test` (test input(s)).
-Analyze the training examples, discover the transformation rule, and write code that applies it.
+Find the transformation pattern and apply it to the test input(s).
 
-Use `python3` for scripting. NumPy and all common scientific/mathematical packages are pre-installed.
+Use `python3` for scripting. All common scientific/mathematical packages are pre-installed — use whatever you need.
 
 Output grids must contain only integers 0-9.
 
-## Step 1: Analyze the Examples
-- Identify key objects in the input and output grids (shapes, lines, regions, patterns).
-- Determine relationships between objects (spatial arrangement, color, size, count).
-- Identify the operations that transform input into output.
-- Consider grid dimensions, symmetries, borders, separators, and subgrid structure.
-- Check if the output grid size differs from input.
+## Approach
+Write `transform.py` with a Python function `transform(grid: np.ndarray) -> np.ndarray`.
+The function takes a 2D numpy integer array and returns a 2D numpy integer array.
+Test against ALL training pairs. Iterate until correct.
 
-## Step 2: Formulate a Hypothesis
-- Find a transformation rule that works consistently across ALL training examples.
-- Prioritize simpler rules first. If a simple rule fails, consider compositions.
-- Common types: object manipulation, color changes, spatial rearrangement, conditional logic, counting/grouping.
-
-## Step 3: Implement the Code
-Write `transform.py` with a function `transform(grid: np.ndarray) -> np.ndarray`.
-- Takes a 2D numpy integer array, returns a 2D numpy integer array.
-- Write modular code with clear variable names.
-- Handle varying grid sizes — don't hardcode dimensions from training examples.
-
-## Step 4: Test and Refine
-- Test against ALL training pairs. Run it and compare outputs.
-- If any pair fails, try a fundamentally different approach rather than patching edge cases.
-- Use debugging (print intermediate results, visualize grids) to understand failures.
-
-## Important
-- The transformation must generalize — don't overfit to the specific training grids.
-- If your first approach doesn't work after a couple of attempts, step back and reconsider the pattern from scratch.
+When analyzing, consider: object manipulation, color changes, spatial patterns,
+object relationships, grid structure (borders, separators, subgrids).
 """
 
 # ── Gemini API Pricing ────────────────────────────────────────────────────────
@@ -376,33 +356,17 @@ def _run_gemini_session(
     token_stats: dict[str, int] = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
     session_start = time.time()
 
-    while True:
-        elapsed = time.time() - session_start
-        if elapsed > session_timeout:
-            proc.kill()
-            break
-
+    def _parse_event(line_str):
+        """Parse a stream-json line and update turns/token_stats."""
+        nonlocal num_turns, token_stats
+        line_str = line_str.rstrip("\n").rstrip("\r")
+        if not line_str:
+            return
+        raw_lines.append(line_str)
         try:
-            line = line_queue.get(timeout=idle_timeout)
-        except queue.Empty:
-            # No output for idle_timeout seconds — kill the hung process
-            proc.kill()
-            break
-
-        if line is None:  # EOF — process closed stdout
-            break
-
-        line = line.rstrip("\n").rstrip("\r")
-        if not line:
-            continue
-
-        raw_lines.append(line)
-
-        try:
-            obj = json.loads(line)
+            obj = json.loads(line_str)
         except json.JSONDecodeError:
-            continue
-
+            return
         evt_type = obj.get("type")
         if evt_type == "tool_use":
             num_turns += 1
@@ -414,13 +378,42 @@ def _run_gemini_session(
                 "output_tokens": stats.get("output_tokens", 0),
             }
 
+    while True:
+        elapsed = time.time() - session_start
+        if elapsed > session_timeout:
+            proc.terminate()  # SIGTERM: give CLI a chance to emit final stats
+            break
+
+        try:
+            line = line_queue.get(timeout=idle_timeout)
+        except queue.Empty:
+            # No output for idle_timeout seconds — terminate the hung process
+            proc.terminate()  # SIGTERM: give CLI a chance to emit final stats
+            break
+
+        if line is None:  # EOF — process closed stdout
+            break
+
+        _parse_event(line)
+
+    # Drain remaining queue items — CLI may emit a final "result" event
+    # with token stats during SIGTERM graceful shutdown
+    while True:
+        try:
+            line = line_queue.get(timeout=5)
+        except queue.Empty:
+            break
+        if line is None:
+            break
+        _parse_event(line)
+
     # Wait for process to finish and capture stderr
     stderr_text = ""
     try:
         proc.wait(timeout=30)
         stderr_text = proc.stderr.read()
     except subprocess.TimeoutExpired:
-        proc.kill()
+        proc.kill()  # SIGKILL as last resort if SIGTERM didn't work
         proc.wait()
         try:
             stderr_text = proc.stderr.read()
@@ -501,14 +494,18 @@ def run_agent(config: dict) -> dict:
                 stderr_text += stderr + "\n"
 
             # If session produced nothing (API error / network failure), retry
-            # without counting it as a real iteration
+            # with exponential backoff + jitter to survive sustained API outages
             if turns == 0 and stats["input_tokens"] == 0:
                 empty_retries += 1
                 _status({"event": "empty_session", "iteration": iteration + 1, "retry": empty_retries})
-                if empty_retries >= 5:
+                if empty_retries >= 12:
                     _status({"event": "too_many_empty_sessions"})
                     break
-                time.sleep(5 * empty_retries)  # Increasing backoff
+                base_delay = min(30 * (2 ** (empty_retries - 1)), 300)  # 30s, 60s, 120s, 240s, 300s, 300s...
+                jitter = random.uniform(0, base_delay * 0.3)
+                delay = base_delay + jitter
+                _status({"event": "empty_session_backoff", "delay": round(delay, 1)})
+                time.sleep(delay)
                 continue
 
             session_started = True
