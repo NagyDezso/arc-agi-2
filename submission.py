@@ -52,39 +52,68 @@ def top_k_vote(grids: list[Grid], k: int = 2) -> list[Grid]:
 
 
 def load_solver_grids(results_dir: Path) -> dict[str, dict[int, list[Grid]]]:
-    """Load solver results from a task_results/ directory.
+    """Load solver results, preferring attempts.jsonl logs for proper test_index.
 
-    Schema: {agents: {agent_id: {test_index, attempts, ...}}}.
+    In whole-task mode, each agent solves ALL test inputs and the attempts.jsonl
+    log files contain per-attempt test_index fields. The task_results JSON only
+    stores a single test_index per agent (always 0 in whole-task mode), so we
+    prefer reading from log files when available.
+
+    Falls back to task_results/*.json when log files are missing.
 
     Returns: {task_id: {test_index: [grid, grid, ...]}}
-    Each agent produces one grid; we pool all grids from all agents
-    for each test index. Majority voting selects the top 2 for submission.
     """
-    task_results_dir = results_dir / "task_results"
-    if not task_results_dir.is_dir():
-        print(f"Warning: task_results dir not found: {task_results_dir}", file=sys.stderr)
-        return {}
-
     out: dict[str, dict[int, list[Grid]]] = {}
 
-    for f in sorted(task_results_dir.glob("*.json")):
-        task_id = f.stem
-        try:
-            data = json.loads(f.read_text())
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"Warning: skipping corrupt {f}: {e}", file=sys.stderr)
-            continue
-        agents: dict[str, dict] = data.get("agents", {})
-        per_test: dict[int, list[Grid]] = {}
+    # Try loading from attempts.jsonl log files first (has proper test_index)
+    logs_dir = results_dir / "logs"
+    if logs_dir.is_dir():
+        for attempts_file in sorted(logs_dir.rglob("attempts.jsonl")):
+            # Extract task_id from path: logs/<task_id>/...
+            parts = attempts_file.relative_to(logs_dir).parts
+            if len(parts) < 2:
+                continue
+            task_id = parts[0]
+            if task_id not in out:
+                out[task_id] = {}
+            for line in attempts_file.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    attempt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ti: int = attempt.get("test_index", 0)
+                grid: Grid | None = attempt.get("grid")
+                if grid is not None:
+                    out.setdefault(task_id, {}).setdefault(ti, []).append(grid)
 
-        for agent_info in agents.values():
-            ti: int = agent_info.get("test_index", 0)
-            attempts: list[Grid] = agent_info.get("attempts", [])
-            if ti not in per_test:
-                per_test[ti] = []
-            per_test[ti].extend(attempts)
+    # Fall back to task_results/*.json for any tasks not found in logs
+    task_results_dir = results_dir / "task_results"
+    if task_results_dir.is_dir():
+        for f in sorted(task_results_dir.glob("*.json")):
+            task_id = f.stem
+            if task_id in out:
+                continue  # already loaded from logs
+            try:
+                data = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"Warning: skipping corrupt {f}: {e}", file=sys.stderr)
+                continue
+            agents: dict[str, dict] = data.get("agents", {})
+            per_test: dict[int, list[Grid]] = {}
 
-        out[task_id] = per_test
+            for agent_info in agents.values():
+                ti = agent_info.get("test_index", 0)
+                attempts: list[Grid] = agent_info.get("attempts", [])
+                if ti not in per_test:
+                    per_test[ti] = []
+                per_test[ti].extend(attempts)
+
+            out[task_id] = per_test
+
+    if not out:
+        print(f"Warning: no results found in {results_dir}", file=sys.stderr)
 
     return out
 

@@ -64,6 +64,7 @@ async def run_agent_in_e2b(
     model: str,
     max_iterations: int,
     soft_training_feedback: bool,
+    whole_task: bool = False,
 ) -> dict:
     """Run a Gemini CLI agent inside an E2B Firecracker sandbox.
 
@@ -85,6 +86,7 @@ async def run_agent_in_e2b(
         "model": model,
         "max_iterations": max_iterations,
         "soft_training_feedback": soft_training_feedback,
+        "whole_task": whole_task,
     }
 
     network = {
@@ -576,21 +578,35 @@ async def process_task(
     async def _dispatch(agent_id: str, kwargs: dict, test_index: int, log_dir: Path) -> dict:
         """Acquire a backend slot, run the agent, release the slot.
 
+        Retries the entire sandbox if the agent returns an empty session (0 turns).
         Writes logs and incremental results immediately when the agent finishes,
         before waiting for other agents (safety net for early termination).
         """
-        if backend_queue is None:
-            result = await _retry_e2b_call(
-                lambda kw=kwargs: run_agent_in_e2b(**kw),
-                agent_id=agent_id,
-            )
-        else:
-            token = await backend_queue.get()
-            try:
+        max_empty_retries = 3
+
+        async def _run_with_empty_retry():
+            for empty_attempt in range(max_empty_retries + 1):
                 result = await _retry_e2b_call(
                     lambda kw=kwargs: run_agent_in_e2b(**kw),
                     agent_id=agent_id,
                 )
+                turns = result.get("turns", 0)
+                attempts = result.get("attempts", [])
+                if turns > 0 or len(attempts) > 0 or empty_attempt >= max_empty_retries:
+                    if turns == 0 and len(attempts) == 0 and empty_attempt >= max_empty_retries:
+                        print(f"  [empty] {agent_id}: all {max_empty_retries} sandbox retries exhausted, accepting empty result")
+                    return result
+                wait = 10 * (empty_attempt + 1)
+                print(f"  [empty] {agent_id}: 0 turns/attempts, retrying sandbox ({empty_attempt + 1}/{max_empty_retries}) in {wait}s...")
+                await asyncio.sleep(wait)
+            return result  # unreachable but satisfies type checker
+
+        if backend_queue is None:
+            result = await _run_with_empty_retry()
+        else:
+            token = await backend_queue.get()
+            try:
+                result = await _run_with_empty_retry()
             finally:
                 backend_queue.put_nowait(token)
 
@@ -615,23 +631,42 @@ async def process_task(
         return result
 
     agent_coros: list = []
+    whole_task = getattr(args, "whole_task", False)
 
-    for ti in range(num_tests):
+    if whole_task:
         for ei in range(args.num_agents):
-            agent_id = f"{task_id}_ens{ei}_t{ti}"
-            agent_log_dir = run_dir / "logs" / task_id / f"t{ti}" / f"agent{ei}"
-            agent_metas.append((agent_id, ti, agent_log_dir))
+            agent_id = f"{task_id}_ens{ei}"
+            agent_log_dir = run_dir / "logs" / task_id / f"agent{ei}"
+            agent_metas.append((agent_id, 0, agent_log_dir))
 
             _kwargs = dict(
                 task_id=task_id,
                 agent_id=agent_id,
                 raw_task=raw_task,
-                test_index=ti,
+                test_index=0,
                 model=args.model,
                 max_iterations=args.max_iterations,
                 soft_training_feedback=args.soft_training_feedback,
+                whole_task=True,
             )
-            agent_coros.append(_dispatch(agent_id, _kwargs, ti, agent_log_dir))
+            agent_coros.append(_dispatch(agent_id, _kwargs, 0, agent_log_dir))
+    else:
+        for ti in range(num_tests):
+            for ei in range(args.num_agents):
+                agent_id = f"{task_id}_ens{ei}_t{ti}"
+                agent_log_dir = run_dir / "logs" / task_id / f"t{ti}" / f"agent{ei}"
+                agent_metas.append((agent_id, ti, agent_log_dir))
+
+                _kwargs = dict(
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    raw_task=raw_task,
+                    test_index=ti,
+                    model=args.model,
+                    max_iterations=args.max_iterations,
+                    soft_training_feedback=args.soft_training_feedback,
+                )
+                agent_coros.append(_dispatch(agent_id, _kwargs, ti, agent_log_dir))
 
     agent_results = await asyncio.gather(*agent_coros, return_exceptions=True)
 
@@ -814,6 +849,7 @@ async def run_all(args: argparse.Namespace):
         "num_agents": args.num_agents,
         "max_iterations": args.max_iterations,
         "soft_training_feedback": args.soft_training_feedback,
+        "whole_task": args.whole_task,
         "num_tasks": len(task_ids),
         "total_tests": total_tests,
         "total_cost": round(total_cost, 2),
@@ -843,6 +879,8 @@ def main():
                         help="Resume a previous run directory")
     parser.add_argument("--soft-training-feedback", action="store_true", default=False,
                         help="Use softer training failure message ('Try again' instead of 'Try a fundamentally different approach')")
+    parser.add_argument("--whole-task", action="store_true", default=False,
+                        help="Each agent sees ALL test inputs and writes one transform() applied to all")
     parser.add_argument("--concurrency", type=int, default=40,
                         help="Max simultaneous E2B sandboxes (agent-level). Default: 40. Set to 0 for unlimited.")
     args = parser.parse_args()

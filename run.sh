@@ -37,7 +37,7 @@ if [[ -n "$SMOKE_TASK" ]]; then
 else
     echo "=== Final ARC-AGI Run ==="
     GEMINI_CLI_TASKS="all"
-    GEMINI_CLI_AGENTS=12
+    GEMINI_CLI_AGENTS=6
     GEMINI_CLI_MAX_ITERATIONS=10
     GEMINI_CLI_CONCURRENCY=132
     RUN_NAME="FINAL_RUN"
@@ -57,6 +57,7 @@ uv run python orchestrator.py \
     --num-agents "$GEMINI_CLI_AGENTS" \
     --max-iterations "$GEMINI_CLI_MAX_ITERATIONS" \
     --concurrency "${GEMINI_CLI_CONCURRENCY:-4}" \
+    --whole-task \
     --name "$RUN_NAME" &
 PID_SOLVER=$!
 

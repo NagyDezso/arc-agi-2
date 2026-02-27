@@ -37,20 +37,41 @@ def emit_status(event: dict) -> None:
 GEMINI_MD = """\
 # ARC-AGI Puzzle Solver
 
-Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
-Find the transformation pattern and apply it to the test input.
+You are an expert at solving Abstract Reasoning Corpus (ARC) tasks by writing Python code.
 
-Use `python3` for scripting. All common scientific/mathematical packages are pre-installed — use whatever you need.
+Read `task.json`. It has `train` (input/output pairs) and `test` (test input(s)).
+Analyze the training examples, discover the transformation rule, and write code that applies it.
+
+Use `python3` for scripting. NumPy and all common scientific/mathematical packages are pre-installed.
 
 Output grids must contain only integers 0-9.
 
-## Approach
-Write `transform.py` with a Python function `transform(grid: np.ndarray) -> np.ndarray`.
-The function takes a 2D numpy integer array and returns a 2D numpy integer array.
-Test against ALL training pairs. Iterate until correct.
+## Step 1: Analyze the Examples
+- Identify key objects in the input and output grids (shapes, lines, regions, patterns).
+- Determine relationships between objects (spatial arrangement, color, size, count).
+- Identify the operations that transform input into output.
+- Consider grid dimensions, symmetries, borders, separators, and subgrid structure.
+- Check if the output grid size differs from input.
 
-When analyzing, consider: object manipulation, color changes, spatial patterns,
-object relationships, grid structure (borders, separators, subgrids).
+## Step 2: Formulate a Hypothesis
+- Find a transformation rule that works consistently across ALL training examples.
+- Prioritize simpler rules first. If a simple rule fails, consider compositions.
+- Common types: object manipulation, color changes, spatial rearrangement, conditional logic, counting/grouping.
+
+## Step 3: Implement the Code
+Write `transform.py` with a function `transform(grid: np.ndarray) -> np.ndarray`.
+- Takes a 2D numpy integer array, returns a 2D numpy integer array.
+- Write modular code with clear variable names.
+- Handle varying grid sizes — don't hardcode dimensions from training examples.
+
+## Step 4: Test and Refine
+- Test against ALL training pairs. Run it and compare outputs.
+- If any pair fails, try a fundamentally different approach rather than patching edge cases.
+- Use debugging (print intermediate results, visualize grids) to understand failures.
+
+## Important
+- The transformation must generalize — don't overfit to the specific training grids.
+- If your first approach doesn't work after a couple of attempts, step back and reconsider the pattern from scratch.
 """
 
 # ── Gemini API Pricing ────────────────────────────────────────────────────────
@@ -234,6 +255,7 @@ def prepare_workspace(
     raw_task: dict,
     test_index: int,
     seed: int = 0,
+    whole_task: bool = False,
 ) -> Path:
     """Create workspace at /workspace with task.json, GEMINI.md, and settings.
 
@@ -244,18 +266,24 @@ def prepare_workspace(
     gemini_dir = ws / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
 
-    # task.json: train + single test input (no output/answer)
-    # Shuffle training examples per agent so each sees a different order
+    # Optionally shuffle training examples (seeded by ensemble index)
     import random
     train = list(raw_task["train"])
     if len(train) > 1 and seed > 0:
         rng = random.Random(seed)
         rng.shuffle(train)
 
-    public_task = {
-        "train": train,
-        "test": [{"input": raw_task["test"][test_index]["input"]}],
-    }
+    # task.json: train + test input(s) (no output/answer)
+    if whole_task:
+        public_task = {
+            "train": train,
+            "test": [{"input": t["input"]} for t in raw_task["test"]],
+        }
+    else:
+        public_task = {
+            "train": train,
+            "test": [{"input": raw_task["test"][test_index]["input"]}],
+        }
     (ws / "task.json").write_text(json.dumps(public_task, indent=2))
 
     (ws / "GEMINI.md").write_text(GEMINI_MD)
@@ -292,19 +320,28 @@ def _run_gemini_session(
     cwd: str,
     stdin_text: str | None = None,
     session_timeout: float = 10800,  # 3 hours default
+    idle_timeout: float = 120,  # kill if no output for 2 min
 ) -> tuple[list[str], int, str, dict[str, int]]:
     """Launch gemini CLI as a subprocess, read stream-json output, wait for exit.
+
+    Uses a reader thread + queue so we can enforce an idle timeout: if the CLI
+    produces no stdout for `idle_timeout` seconds, the process is killed and we
+    return whatever we have (likely empty — triggering the empty-session retry).
 
     Args:
         cmd_str: Shell command string to run (gemini invocation).
         cwd: Working directory.
         stdin_text: If provided, write to stdin then close (for --resume mode).
         session_timeout: Max seconds for the entire session (default: 3h).
+        idle_timeout: Kill process if no stdout line for this many seconds.
 
     Returns:
         (raw_lines, num_turns, stderr_text, token_stats)
         where token_stats has keys: input_tokens, cached_tokens, output_tokens
     """
+    import queue
+    import threading
+
     full_cmd = f"cd {cwd} && {cmd_str}"
     proc = subprocess.Popen(
         ["bash", "-c", full_cmd],
@@ -321,11 +358,40 @@ def _run_gemini_session(
         proc.stdin.write(stdin_text)
     proc.stdin.close()
 
+    # Reader thread: pushes lines (or None for EOF) into a queue
+    line_queue: queue.Queue[str | None] = queue.Queue()
+
+    def _reader():
+        try:
+            for line in proc.stdout:
+                line_queue.put(line)
+        finally:
+            line_queue.put(None)  # sentinel for EOF
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
     raw_lines: list[str] = []
     num_turns = 0
     token_stats: dict[str, int] = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
+    session_start = time.time()
 
-    for line in proc.stdout:
+    while True:
+        elapsed = time.time() - session_start
+        if elapsed > session_timeout:
+            proc.kill()
+            break
+
+        try:
+            line = line_queue.get(timeout=idle_timeout)
+        except queue.Empty:
+            # No output for idle_timeout seconds — kill the hung process
+            proc.kill()
+            break
+
+        if line is None:  # EOF — process closed stdout
+            break
+
         line = line.rstrip("\n").rstrip("\r")
         if not line:
             continue
@@ -349,9 +415,19 @@ def _run_gemini_session(
             }
 
     # Wait for process to finish and capture stderr
-    # stdin is already closed, so just wait and read stderr
-    stderr_text = proc.stderr.read()
-    proc.wait(timeout=session_timeout)
+    stderr_text = ""
+    try:
+        proc.wait(timeout=30)
+        stderr_text = proc.stderr.read()
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        try:
+            stderr_text = proc.stderr.read()
+        except Exception:
+            pass
+
+    reader_thread.join(timeout=5)
 
     return raw_lines, num_turns, stderr_text, token_stats
 
@@ -367,6 +443,7 @@ def run_agent(config: dict) -> dict:
     model: str = config["model"]
     max_iterations: int = config.get("max_iterations", 10)
     soft_training_feedback: bool = config.get("soft_training_feedback", False)
+    whole_task: bool = config.get("whole_task", False)
 
     start = time.time()
     attempts: list[dict] = []
@@ -382,12 +459,12 @@ def run_agent(config: dict) -> dict:
         emit_status({"agent_id": agent_id, "task_id": task_id, **event})
 
     try:
-        # Extract ensemble index from agent_id (e.g. "taskid_ens5_t0" -> 5)
+        # Extract ensemble index from agent_id (e.g. "taskid_ens5" -> 5)
         import re
-        ens_match = re.search(r'_ens(\d+)_', agent_id)
+        ens_match = re.search(r'_ens(\d+)', agent_id)
         seed = int(ens_match.group(1)) if ens_match else 0
 
-        ws = prepare_workspace(agent_id, raw_task, test_index, seed=seed)
+        ws = prepare_workspace(agent_id, raw_task, test_index, seed=seed, whole_task=whole_task)
 
         _status({"event": "started", "model": model})
 
@@ -398,10 +475,13 @@ def run_agent(config: dict) -> dict:
         feedback = ""
         last_outcome = "pending"
 
-        for iteration in range(max_iterations):
+        iteration = 0
+        empty_retries = 0
+        session_started = False  # Track if first successful session has happened
+        while iteration < max_iterations:
             _status({"event": "iteration", "iteration": iteration + 1, "max_iterations": max_iterations})
 
-            if iteration == 0:
+            if not session_started:
                 cmd_str = f"{gemini_cmd_base} -p {shlex.quote(initial_prompt)}"
                 raw_lines, turns, stderr, stats = _run_gemini_session(
                     cmd_str, str(ws), stdin_text=None,
@@ -419,6 +499,19 @@ def run_agent(config: dict) -> dict:
             total_output_tokens += stats["output_tokens"]
             if stderr:
                 stderr_text += stderr + "\n"
+
+            # If session produced nothing (API error / network failure), retry
+            # without counting it as a real iteration
+            if turns == 0 and stats["input_tokens"] == 0:
+                empty_retries += 1
+                _status({"event": "empty_session", "iteration": iteration + 1, "retry": empty_retries})
+                if empty_retries >= 5:
+                    _status({"event": "too_many_empty_sessions"})
+                    break
+                time.sleep(5 * empty_retries)  # Increasing backoff
+                continue
+
+            session_started = True
 
             # Read transform.py from workspace (Gemini wrote it via write_file)
             transform_path = ws / "transform.py"
@@ -450,28 +543,55 @@ def run_agent(config: dict) -> dict:
                         feedback = feedback_text
                     last_outcome = "training_fail"
                 elif fn is not None:
-                    test_input = raw_task["test"][test_index]["input"]
-                    try:
-                        test_arr = np.array(test_input, dtype=int)
-                        grid = fn(test_arr.copy()).astype(int).tolist()
-                    except Exception as e:
-                        feedback = f"Transform passed training but failed on test input: {e}"
-                        last_outcome = "test_error"
+                    if whole_task:
+                        # Apply transform to ALL test inputs
+                        all_ok = True
+                        for ti, test_case in enumerate(raw_task["test"]):
+                            try:
+                                test_arr = np.array(test_case["input"], dtype=int)
+                                grid = fn(test_arr.copy()).astype(int).tolist()
+                            except Exception as e:
+                                feedback = f"Transform passed training but failed on test input {ti}: {e}"
+                                last_outcome = "test_error"
+                                all_ok = False
+                                break
+                            attempts_used += 1
+                            attempts.append({
+                                "test_index": ti,
+                                "attempt": attempts_used,
+                                "grid": grid,
+                                "timestamp": time.time(),
+                            })
+                        if all_ok:
+                            last_outcome = "submitted"
+                            _status({"event": "submitted", "attempt": attempts_used})
+                            break
                     else:
-                        attempts_used += 1
-                        attempts.append({
-                            "test_index": test_index,
-                            "attempt": attempts_used,
-                            "grid": grid,
-                            "timestamp": time.time(),
-                        })
-                        last_outcome = "submitted"
-                        _status({"event": "submitted", "attempt": attempts_used})
-                        # Training passed — submit the grid and stop
-                        break
+                        test_input = raw_task["test"][test_index]["input"]
+                        try:
+                            test_arr = np.array(test_input, dtype=int)
+                            grid = fn(test_arr.copy()).astype(int).tolist()
+                        except Exception as e:
+                            feedback = f"Transform passed training but failed on test input: {e}"
+                            last_outcome = "test_error"
+                        else:
+                            attempts_used += 1
+                            attempts.append({
+                                "test_index": test_index,
+                                "attempt": attempts_used,
+                                "grid": grid,
+                                "timestamp": time.time(),
+                            })
+                            last_outcome = "submitted"
+                            _status({"event": "submitted", "attempt": attempts_used})
+                            # Training passed — submit the grid and stop
+                            break
 
-        # Fallback: extract grid from raw output if transform loop produced nothing
-        if not attempts:
+            iteration += 1
+
+        # Fallback: heuristic extraction if transform loop produced nothing
+        # (only for single-test mode; can't produce grids for multiple test inputs)
+        if not attempts and not whole_task:
             extracted = extract_grid_from_output(all_raw_lines)
             if extracted is not None:
                 attempts_used += 1
