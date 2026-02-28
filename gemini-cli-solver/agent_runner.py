@@ -11,6 +11,7 @@ Communication:
 
 import importlib.util
 import json
+import multiprocessing
 import os
 import random
 import shlex
@@ -170,6 +171,39 @@ def _find_last_grid(text: str) -> list[list[int]] | None:
     return grids[-1] if grids else None
 
 
+# ── Timeout wrapper for transform execution ──────────────────────────────────
+
+TRANSFORM_TIMEOUT = 120  # seconds — kill transforms that take too long (infinite loops)
+
+
+def _run_fn_in_proc(fn, arg, result_queue):
+    """Target for subprocess: run fn(arg) and put result on queue."""
+    try:
+        result = fn(arg)
+        result_queue.put(("ok", result))
+    except Exception as e:
+        result_queue.put(("error", e))
+
+
+def run_with_timeout(fn, arg, timeout=TRANSFORM_TIMEOUT):
+    """Run fn(arg) with a timeout. Returns result or raises TimeoutError/Exception."""
+    ctx = multiprocessing.get_context("fork")
+    q = ctx.Queue()
+    p = ctx.Process(target=_run_fn_in_proc, args=(fn, arg, q))
+    p.start()
+    p.join(timeout=timeout)
+    if p.is_alive():
+        p.kill()
+        p.join()
+        raise TimeoutError(f"Transform execution timed out after {timeout}s (likely infinite loop)")
+    if q.empty():
+        raise RuntimeError("Transform process died without returning a result")
+    status, value = q.get_nowait()
+    if status == "error":
+        raise value
+    return value
+
+
 # ── Transform validation ─────────────────────────────────────────────────────
 
 def test_transform(
@@ -198,7 +232,7 @@ def test_transform(
         expected = np.array(ex["output"], dtype=int)
 
         try:
-            result = fn(inp.copy())
+            result = run_with_timeout(fn, inp.copy())
         except Exception:
             return (
                 False,
@@ -542,7 +576,7 @@ def run_agent(config: dict) -> dict:
                         for ti, test_case in enumerate(raw_task["test"]):
                             try:
                                 test_arr = np.array(test_case["input"], dtype=int)
-                                grid = fn(test_arr.copy()).astype(int).tolist()
+                                grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
                             except Exception as e:
                                 feedback = f"Transform passed training but failed on test input {ti}: {e}"
                                 last_outcome = "test_error"
@@ -563,7 +597,7 @@ def run_agent(config: dict) -> dict:
                         test_input = raw_task["test"][test_index]["input"]
                         try:
                             test_arr = np.array(test_input, dtype=int)
-                            grid = fn(test_arr.copy()).astype(int).tolist()
+                            grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
                         except Exception as e:
                             feedback = f"Transform passed training but failed on test input: {e}"
                             last_outcome = "test_error"
