@@ -15,6 +15,7 @@ import multiprocessing
 import os
 import random
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -362,6 +363,7 @@ def _run_gemini_session(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        start_new_session=True,  # isolate process group so we can kill the whole tree
     )
 
     # If resuming, pipe the feedback prompt then close stdin;
@@ -413,7 +415,7 @@ def _run_gemini_session(
     while True:
         remaining = session_timeout - (time.time() - session_start)
         if remaining <= 0:
-            proc.terminate()  # SIGTERM: give CLI a chance to emit final stats
+            os.killpg(proc.pid, signal.SIGTERM)  # kill entire process tree
             break
 
         try:
@@ -443,7 +445,7 @@ def _run_gemini_session(
         proc.wait(timeout=30)
         stderr_text = proc.stderr.read()
     except subprocess.TimeoutExpired:
-        proc.kill()  # SIGKILL as last resort if SIGTERM didn't work
+        os.killpg(proc.pid, signal.SIGKILL)  # SIGKILL entire tree as last resort
         proc.wait()
         try:
             stderr_text = proc.stderr.read()
