@@ -57,7 +57,7 @@ uv run python orchestrator.py \
     --num-agents "$GEMINI_CLI_AGENTS" \
     --max-iterations "$GEMINI_CLI_MAX_ITERATIONS" \
     --concurrency "${GEMINI_CLI_CONCURRENCY:-4}" \
-    --whole-task \
+    ${GEMINI_CLI_WHOLE_TASK:+--whole-task} \
     --name "$RUN_NAME" &
 PID_SOLVER=$!
 
