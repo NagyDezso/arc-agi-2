@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash curl ca-certificates \
+    && apt-get install -y --no-install-recommends bash curl ca-certificates gnupg jq \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://opencode.ai/install | bash
@@ -19,6 +19,6 @@ RUN pip install --no-cache-dir \
     sympy \
     networkx
 
-RUN mkdir -p /workspace
+RUN mkdir -p /workspace /app
 
 WORKDIR /workspace

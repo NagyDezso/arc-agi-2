@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""E2B sandbox template for Gemini CLI ARC-AGI solver.
+"""E2B sandbox template for ARC-AGI solver.
 
 Defines and builds the Firecracker microVM template with:
 - Python 3.11 + scientific packages
 - Node.js 22 + Gemini CLI (npm)
+- OpenCode CLI
 
 Usage:
   python e2b_template.py          # Build the template
@@ -11,19 +12,16 @@ Usage:
 """
 
 import argparse
-
 from e2b import Template, default_build_logger
 
-
-TEMPLATE_NAME = "arc-gemini-solver"
-
+TEMPLATE_NAME = "arc-solver"
 
 def define_template() -> Template:
-    """Define the sandbox template with Node.js 22 + Gemini CLI + Python scientific packages."""
     return (
         Template()
         .from_python_image("3.11")
         .apt_install(["curl", "ca-certificates", "gnupg", "jq"])
+        .run_cmd("curl -fsSL https://opencode.ai/install | bash", user="root")
         .run_cmd(
             "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - "
             "&& apt-get install -y nodejs",
@@ -36,11 +34,11 @@ def define_template() -> Template:
             "sympy", "networkx",
         ])
         .run_cmd("mkdir -p /workspace && mkdir -p /app", user="root")
+        .env("PATH", "/root/.local/bin:/root/.opencode/bin:$PATH")
     )
 
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build E2B template for Gemini CLI ARC solver")
+    parser = argparse.ArgumentParser(description="Build E2B template for ARC solver")
     parser.add_argument("--name", default=TEMPLATE_NAME,
                         help=f"Template name (default: {TEMPLATE_NAME})")
     parser.add_argument("--cpu", type=int, default=2,
@@ -60,7 +58,6 @@ def main() -> None:
         on_build_logs=default_build_logger(),
     )
     print(f"Template built successfully: {result.template_id} ({args.name})")
-
 
 if __name__ == "__main__":
     main()

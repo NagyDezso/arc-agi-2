@@ -1,15 +1,14 @@
 import argparse
 import asyncio
 import logging
-import os
 import sys
-from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.orchestrator import run_all
+
 load_dotenv()
 
-from src.orchestrator import run_all, cleanup_opencode_containers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ARC-AGI OpenCode CLI Solver (Docker)")
+    parser = argparse.ArgumentParser(description="ARC-AGI CLI Solver (Unified)")
     parser.add_argument(
         "--tasks", default="all", help="'all' (default) | comma-separated IDs"
     )
@@ -35,8 +34,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="kilo/minimax/minimax-M2.5:free",
-        help="Model in provider/model format",
+        default="gemini-2.5-flash-lite",
+        help="Model name (e.g., gemini-3.1-pro-preview, minimax-M2.5:free)",
     )
     parser.add_argument(
         "--name", default=None, help="Name prefix for results directory"
@@ -54,7 +53,7 @@ def main():
         "--concurrency",
         type=int,
         default=5,
-        help="Max simultaneous Docker containers (default: 5). Set to 0 for unlimited.",
+        help="Max simultaneous agents (default: 5). Set to 0 for unlimited.",
     )
     parser.add_argument(
         "--limit",
@@ -62,13 +61,24 @@ def main():
         default=None,
         help="Limit the number of tasks to run",
     )
+    parser.add_argument(
+        "--cli",
+        choices=["opencode", "gemini"],
+        default="gemini",
+        help="CLI to use (opencode or gemini, default: gemini)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["docker", "e2b"],
+        default="docker",
+        help="Execution backend (docker or e2b, default: docker)",
+    )
     args = parser.parse_args()
 
     try:
         asyncio.run(run_all(args))
     except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received, cleaning up...")
-        cleanup_opencode_containers()
+        logger.info("KeyboardInterrupt received, exiting...")
         sys.exit(130)
 
 
