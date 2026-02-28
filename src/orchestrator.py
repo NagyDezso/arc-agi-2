@@ -18,7 +18,7 @@ import random
 from collections.abc import Callable
 from pathlib import Path
 
-from src.cli_impl import get_cli_impl
+from src.cli_impl import get_cli_impl, CLIImpl
 from src.backends import get_backend_runner
 
 ROOT = Path(__file__).resolve().parent
@@ -68,7 +68,7 @@ def load_task_json(task_id: str) -> dict:
     return all_tasks[task_id]
 
 
-def write_agent_logs(result: dict, task_id: str, log_dir: Path, cli_impl) -> None:
+def write_agent_logs(result: dict, task_id: str, log_dir: Path, cli_impl: CLIImpl) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     raw_lines: list[str] = result.get("raw_lines", [])
 
@@ -191,10 +191,12 @@ async def process_task(
                 )
                 turns = result.get("turns", 0)
                 attempts = result.get("attempts", [])
-                if turns > 0 or len(attempts) > 0 or empty_attempt >= max_empty_retries:
+                error = result.get("error")
+                if turns > 0 or len(attempts) > 0 or error or empty_attempt >= max_empty_retries:
                     if (
                         turns == 0
                         and len(attempts) == 0
+                        and not error
                         and empty_attempt >= max_empty_retries
                     ):
                         print(

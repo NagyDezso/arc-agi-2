@@ -1,11 +1,13 @@
 """CLI implementations for open_code and gemini."""
 
-def get_cli_impl(cli_name: str):
+from .base import CLIImpl
+
+def get_cli_impl(cli_name: str) -> CLIImpl:
     if cli_name == "opencode":
-        import src.cli_impl.opencode as impl
-        return impl
+        from .opencode import OpenCodeCLI
+        return OpenCodeCLI()
     elif cli_name == "gemini":
-        import src.cli_impl.gemini as impl
-        return impl
+        from .gemini import GeminiCLI
+        return GeminiCLI()
     else:
         raise ValueError(f"Unknown cli name: {cli_name}")

@@ -29,7 +29,7 @@ def main():
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=10,
+        default=5,
         help="Max transform loop iterations per agent (default: 10)",
     )
     parser.add_argument(

@@ -122,6 +122,9 @@ requires-dist = [
     { name = "python-dotenv" },
 ]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "python-dotenv"
 version = "1.2.1"

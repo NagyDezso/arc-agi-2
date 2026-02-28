@@ -17,6 +17,9 @@ from pathlib import Path
 
 import numpy as np
 
+from cli_impl import CLIImpl
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +112,7 @@ def prepare_workspace(
     agent_id: str,
     raw_task: dict,
     test_index: int,
-    cli_impl,
+    cli_impl: CLIImpl,
     seed: int = 0,
     whole_task: bool = False,
 ) -> Path:
@@ -181,7 +184,6 @@ def run_agent(config: dict) -> dict:
         initial_prompt = f"Read {md_name}, then solve the ARC puzzle in task.json."
         feedback = ""
         iteration = 0
-        empty_retries = 0
         session_started = False
 
         while iteration < max_iterations:
@@ -208,30 +210,12 @@ def run_agent(config: dict) -> dict:
 
             all_raw_lines.extend(raw_lines)
             total_turns += turns
-            total_input_tokens += stats.get("input_tokens", 0)
-            total_cached_tokens += stats.get("cached_tokens", 0)
-            total_output_tokens += stats.get("output_tokens", 0)
+            total_input_tokens += stats["input_tokens"]
+            total_cached_tokens += stats["cached_tokens"]
+            total_output_tokens += stats["output_tokens"]
             if stderr:
+                _status({"event": "error", "msg": stderr})
                 stderr_text += stderr + "\n"
-
-            if turns == 0 and stats.get("input_tokens", 0) == 0:
-                empty_retries += 1
-                _status(
-                    {
-                        "event": "empty_session",
-                        "iteration": iteration + 1,
-                        "retry": empty_retries,
-                    }
-                )
-                if empty_retries >= 12:
-                    _status({"event": "too_many_empty_sessions"})
-                    break
-                base_delay = min(30 * (2 ** (empty_retries - 1)), 300)
-                jitter = random.uniform(0, base_delay * 0.3)
-                delay = base_delay + jitter
-                _status({"event": "empty_session_backoff", "delay": round(delay, 1)})
-                time.sleep(delay)
-                continue
 
             transform_path = ws / "transform.py"
             if not transform_path.exists():
@@ -409,8 +393,9 @@ def main():
     if gemini_access_token:
         gemini_auth_path = Path("/root/.gemini")
         gemini_auth_path.mkdir(parents=True, exist_ok=True)
-        with open(gemini_auth_path / "oauth_creds.json", "w") as f:
-            json.dump(
+
+        (gemini_auth_path / "oauth_creds.json").write_text(
+            json.dumps(
                 {
                     "access_token": gemini_access_token,
                     "refresh_token": os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN", ""),
@@ -419,9 +404,12 @@ def main():
                     "id_token": os.environ.get("GEMINI_OAUTH_ID_TOKEN", "token"),
                     "expiry_date": int(time.time() * 1000)
                     + 3600000,  # Set expiry to 1 hour from now
-                },
-                f,
+                }
             )
+        )
+        (gemini_auth_path / "settings.json").write_text(
+            json.dumps({"security": {"auth": {"selectedType": "oauth-personal"}}})
+        )
 
     config = json.loads(config_path.read_text())
     config_path.unlink()

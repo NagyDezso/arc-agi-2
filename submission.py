@@ -332,7 +332,7 @@ def print_cost_report(cost_breakdown: dict) -> None:
 
     g = cost_breakdown["gemini_cli"]
     g_usage = g.get("usage", {})
-    print(f"\nGemini CLI Solver:")
+    print("\nGemini CLI Solver:")
     print(f"  Model:         {g['model']}")
     print(f"  Gemini API:    ${g['gemini_api_cost']:.4f}")
     print(f"  E2B Infra:     ${g['e2b_cost']:.4f}")

@@ -151,27 +151,18 @@ def _run_agent_container_sync(
                         continue
                 except (json.JSONDecodeError, TypeError):
                     pass
-                stderr_lines.append(line)
-
-        if output_buffer.strip():
-            line = output_buffer.strip()
-            try:
-                event = json.loads(line)
-                if isinstance(event, dict) and "event" in event:
-                    _handle_status_stdout_line(line)
-                else:
-                    stderr_lines.append(line)
-            except (json.JSONDecodeError, TypeError):
+                logger.error(f"[docker-stderr] {container_name}: {line}")
                 stderr_lines.append(line)
 
         wait_result = container.wait(timeout=3600)
         exit_code = int(wait_result.get("StatusCode", -1))
-
         results_path = run_root / "results.json"
         if not results_path.exists():
-            raise RuntimeError(
-                f"Docker run finished with code {exit_code}, no results.json."
-            )
+            return {
+                "error": f"Docker run finished with code {exit_code}, no results.json.",
+                "attempts": [],
+                "turns": 0,
+            }, stderr_lines, exit_code
         result = json.loads(results_path.read_text())
         return result, stderr_lines, exit_code
     finally:
