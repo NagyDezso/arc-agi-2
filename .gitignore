@@ -24,4 +24,4 @@ __pycache__/
 submission*.json
 cost_breakdown.json
 
-gemini-cli-solver/results
+results/

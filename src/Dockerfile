@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://opencode.ai/install | bash
+
+ENV PATH="/root/.local/bin:/root/.opencode/bin:${PATH}"
+
+RUN pip install --no-cache-dir \
+    numpy \
+    scipy \
+    matplotlib \
+    pandas \
+    scikit-learn \
+    scikit-image \
+    pillow \
+    sympy \
+    networkx
+
+RUN mkdir -p /workspace
+
+WORKDIR /workspace
