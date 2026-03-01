@@ -58,7 +58,6 @@ uv run python orchestrator.py \
     --max-iterations "$GEMINI_CLI_MAX_ITERATIONS" \
     --model "${GEMINI_CLI_MODEL:-gemini-3.1-pro-preview}" \
     --concurrency "${GEMINI_CLI_CONCURRENCY:-4}" \
-    ${GEMINI_CLI_WHOLE_TASK:+--whole-task} \
     --name "$RUN_NAME" &
 PID_SOLVER=$!
 
