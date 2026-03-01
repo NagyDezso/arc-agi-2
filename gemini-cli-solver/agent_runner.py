@@ -40,8 +40,8 @@ def emit_status(event: dict) -> None:
 GEMINI_MD = """\
 # ARC-AGI Puzzle Solver
 
-Read `task.json`. It has `train` (input/output pairs) and `test` (test input(s)).
-Find the transformation pattern and apply it to the test input(s).
+Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
+Find the transformation pattern and apply it to the test input.
 
 Use `python3` for scripting. All common scientific/mathematical packages are pre-installed — use whatever you need.
 
