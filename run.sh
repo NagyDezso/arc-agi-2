@@ -51,13 +51,15 @@ echo "--- Starting Gemini CLI solver ---"
 echo "[gemini-cli] $GEMINI_CLI_AGENTS agents, max-iterations $GEMINI_CLI_MAX_ITERATIONS"
 echo ""
 
-cd "$SCRIPT_DIR/gemini-cli-solver"
-uv run python orchestrator.py \
+cd "$SCRIPT_DIR"
+uv run python main.py \
     --tasks "$GEMINI_CLI_TASKS" \
     --num-agents "$GEMINI_CLI_AGENTS" \
     --max-iterations "$GEMINI_CLI_MAX_ITERATIONS" \
+    --model "${GEMINI_CLI_MODEL:-gemini-3.1-pro-preview}" \
     --concurrency "${GEMINI_CLI_CONCURRENCY:-4}" \
-    --whole-task \
+    --cli gemini \
+    --backend docker \
     --name "$RUN_NAME" &
 PID_SOLVER=$!
 

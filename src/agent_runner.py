@@ -245,6 +245,7 @@ def run_agent(config: dict) -> dict:
                 elif fn is not None:
                     if whole_task:
                         all_ok = True
+                        pending_grids = []
                         for ti, test_case in enumerate(raw_task["test"]):
                             try:
                                 test_arr = np.array(test_case["input"], dtype=int)
@@ -260,16 +261,17 @@ def run_agent(config: dict) -> dict:
                                 )
                                 all_ok = False
                                 break
-                            attempts_used += 1
-                            attempts.append(
-                                {
-                                    "test_index": ti,
-                                    "attempt": attempts_used,
-                                    "grid": grid,
-                                    "timestamp": time.time(),
-                                }
-                            )
+                            pending_grids.append({"test_index": ti, "grid": grid})
                         if all_ok:
+                            for p in pending_grids:
+                                attempts_used += 1
+                                attempts.append(
+                                    {
+                                        **p,
+                                        "attempt": attempts_used,
+                                        "timestamp": time.time(),
+                                    }
+                                )
                             _status({"event": "submitted", "attempt": attempts_used})
                             break
                     else:

@@ -1,7 +1,9 @@
 import json
+import os
 import queue
 import re
 import shlex
+import signal
 import subprocess
 import threading
 import time
@@ -13,8 +15,8 @@ from .base import CLIImpl
 SOLVER_MD = """\
 # ARC-AGI Puzzle Solver
 
-Read `task.json`. It has `train` (input/output pairs) and `test` (test input(s)).
-Find the transformation pattern and apply it to the test input(s).
+Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
+Find the transformation pattern and apply it to the test input.
 
 Use `python3` for scripting. All common scientific/mathematical packages are pre-installed — use whatever you need.
 
@@ -119,6 +121,7 @@ class GeminiCLI(CLIImpl):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            start_new_session=True,  # isolate process group so we can kill the whole tree
         )
         if stdin_text:
             proc.stdin.write(stdin_text)
@@ -166,7 +169,7 @@ class GeminiCLI(CLIImpl):
         while True:
             remaining = session_timeout - (time.time() - session_start_time)
             if remaining <= 0:
-                proc.terminate()
+                os.killpg(proc.pid, signal.SIGTERM)  # kill entire process tree
                 break
             try:
                 line = line_queue.get(timeout=min(remaining, 60))
@@ -190,7 +193,7 @@ class GeminiCLI(CLIImpl):
             proc.wait(timeout=30)
             stderr_text = proc.stderr.read()
         except subprocess.TimeoutExpired:
-            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)  # SIGKILL entire tree as last resort
             proc.wait()
             try:
                 stderr_text = proc.stderr.read()
