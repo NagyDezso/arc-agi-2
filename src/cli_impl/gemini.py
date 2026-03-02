@@ -50,9 +50,6 @@ _TOOL_NAME_MAP = {
 }
 
 class GeminiCLI(CLIImpl):
-    def get_solver_md(self) -> str:
-        return SOLVER_MD
-
     def workspace_extras(self, ws_path: Path):
         gemini_dir = ws_path / ".gemini"
         gemini_dir.mkdir(parents=True, exist_ok=True)

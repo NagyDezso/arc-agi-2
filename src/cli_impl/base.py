@@ -3,10 +3,6 @@ from pathlib import Path
 
 @runtime_checkable
 class CLIImpl(Protocol):
-    def get_solver_md(self) -> str:
-        """Returns the content of the solver guidance markdown file."""
-        ...
-
     def workspace_extras(self, ws_path: Path) -> None:
         """Applies implementation-specific workspace setup (e.g., settings.json)."""
         ...

@@ -23,6 +23,18 @@ from cli_impl import CLIImpl
 
 logger = logging.getLogger(__name__)
 
+INSTRUCTION = """\
+Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
+Find the transformation pattern and apply it to the test input.
+Use `python3` for scripting. All common scientific/mathematical packages are pre-installed — use whatever you need.
+Output grids must contain only integers 0-9.
+Write `transform.py` with a Python function `transform(grid: np.ndarray) -> np.ndarray`.
+The function takes a 2D numpy integer array and returns a 2D numpy integer array.
+Test against ALL training pairs. Iterate until correct.
+When analyzing, consider: object manipulation, color changes, spatial patterns,
+object relationships, grid structure (borders, separators, subgrids).
+"""
+
 
 def emit_status(event: dict) -> None:
     try:
@@ -136,8 +148,6 @@ def prepare_workspace(
         }
     (ws / "task.json").write_text(json.dumps(public_task, indent=2))
 
-    md_name = "AGENTS.md" if "opencode" in str(cli_impl) else "GEMINI.md"
-    (ws / md_name).write_text(cli_impl.get_solver_md())
     cli_impl.workspace_extras(ws)
     return ws
 
@@ -180,10 +190,6 @@ def run_agent(config: dict) -> dict:
             agent_id, raw_task, test_index, impl, seed=seed, whole_task=whole_task
         )
         _status({"event": "started", "model": model})
-        time.sleep(10000)
-        exit(0)
-        md_name = "AGENTS.md" if "opencode" in cli_type else "GEMINI.md"
-        initial_prompt = f"Read {md_name}, then solve the ARC puzzle in task.json."
         feedback = ""
         iteration = 0
         session_started = False
@@ -200,7 +206,7 @@ def run_agent(config: dict) -> dict:
             raw_lines, turns, stderr, stats, session_started_now = impl.run_session(
                 ws_path=ws,
                 model=model,
-                initial_prompt=initial_prompt,
+                initial_prompt=INSTRUCTION,
                 feedback=feedback,
                 iteration=iteration,
                 session_started=session_started,
