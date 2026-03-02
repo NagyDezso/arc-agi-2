@@ -12,9 +12,18 @@ Usage:
 """
 
 import argparse
+import logging
+import sys
 from e2b import Template, default_build_logger
 
 TEMPLATE_NAME = "arc-solver"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 
 def define_template() -> Template:
     return (
@@ -49,7 +58,7 @@ def main() -> None:
 
     template = define_template()
 
-    print(f"Building E2B template '{args.name}' (cpu={args.cpu}, memory={args.memory}MB)...")
+    logger.info(f"Building E2B template '{args.name}' (cpu={args.cpu}, memory={args.memory}MB)...")
     result = Template.build(
         template,
         args.name,
@@ -57,7 +66,7 @@ def main() -> None:
         memory_mb=args.memory,
         on_build_logs=default_build_logger(),
     )
-    print(f"Template built successfully: {result.template_id} ({args.name})")
+    logger.info(f"Template built successfully: {result.template_id} ({args.name})")
 
 if __name__ == "__main__":
     main()

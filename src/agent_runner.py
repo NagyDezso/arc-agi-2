@@ -398,12 +398,11 @@ def main():
             json.dumps(
                 {
                     "access_token": gemini_access_token,
-                    "refresh_token": os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN", ""),
-                    "scope": "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid https://www.googleapis.com/auth/cloud-platform",
+                    "refresh_token": os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN"),
+                    "scope": "https://www.googleapis.com/auth/userinfo.email openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cloud-platform",
                     "token_type": "Bearer",
-                    "id_token": os.environ.get("GEMINI_OAUTH_ID_TOKEN", "token"),
-                    "expiry_date": int(time.time() * 1000)
-                    + 3600000,  # Set expiry to 1 hour from now
+                    "id_token": os.environ.get("GEMINI_OAUTH_ID_TOKEN"),
+                    "expiry_date": 1772303384460,
                 }
             )
         )

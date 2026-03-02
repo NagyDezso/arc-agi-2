@@ -9,12 +9,6 @@ from src.orchestrator import run_all
 
 load_dotenv()
 
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +42,12 @@ def main():
         action="store_true",
         default=False,
         help="Use softer training failure message",
+    )
+    parser.add_argument(
+        "--whole-task",
+        action="store_true",
+        default=False,
+        help="Each agent sees ALL test inputs and writes one transform() applied to all",
     )
     parser.add_argument(
         "--concurrency",

@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 from collections import Counter
@@ -24,6 +25,8 @@ from pathlib import Path
 
 
 Grid = list[list[int]]
+
+logger = logging.getLogger(__name__)
 
 
 def canonicalize_grid(grid: Grid) -> str:
@@ -98,7 +101,7 @@ def load_solver_grids(results_dir: Path) -> dict[str, dict[int, list[Grid]]]:
             try:
                 data = json.loads(f.read_text())
             except (json.JSONDecodeError, OSError) as e:
-                print(f"Warning: skipping corrupt {f}: {e}", file=sys.stderr)
+                logger.warning(f"skipping corrupt {f}: {e}")
                 continue
             agents: dict[str, dict] = data.get("agents", {})
             per_test: dict[int, list[Grid]] = {}
@@ -113,7 +116,7 @@ def load_solver_grids(results_dir: Path) -> dict[str, dict[int, list[Grid]]]:
             out[task_id] = per_test
 
     if not out:
-        print(f"Warning: no results found in {results_dir}", file=sys.stderr)
+        logger.warning(f"no results found in {results_dir}")
 
     return out
 
@@ -139,7 +142,7 @@ def load_ground_truth(data_dir: Path) -> dict[str, list[Grid]]:
     """
     solutions_file = data_dir / "arc-agi_evaluation_solutions.json"
     if not solutions_file.exists():
-        print(f"Warning: ground truth not found: {solutions_file}", file=sys.stderr)
+        logger.warning(f"ground truth not found: {solutions_file}")
         return {}
     return json.loads(solutions_file.read_text())
 
@@ -326,29 +329,29 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
 
 def print_cost_report(cost_breakdown: dict) -> None:
     """Print human-readable cost breakdown to console."""
-    print(f"\n{'='*60}")
-    print("COST BREAKDOWN")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info("COST BREAKDOWN")
+    logger.info(f"{'='*60}")
 
     g = cost_breakdown["gemini_cli"]
     g_usage = g.get("usage", {})
-    print("\nGemini CLI Solver:")
-    print(f"  Model:         {g['model']}")
-    print(f"  Gemini API:    ${g['gemini_api_cost']:.4f}")
-    print(f"  E2B Infra:     ${g['e2b_cost']:.4f}")
-    print(f"  TOTAL:         ${g['total_cost']:.4f}")
+    logger.info("\nGemini CLI Solver:")
+    logger.info(f"  Model:         {g['model']}")
+    logger.info(f"  Gemini API:    ${g['gemini_api_cost']:.4f}")
+    logger.info(f"  E2B Infra:     ${g['e2b_cost']:.4f}")
+    logger.info(f"  TOTAL:         ${g['total_cost']:.4f}")
     if g_usage:
-        print(f"  Tokens:        input={g_usage.get('input_tokens', 0):,}, "
-              f"cached={g_usage.get('cached_tokens', 0):,}, "
-              f"output={g_usage.get('output_tokens', 0):,}")
-    print(f"{'='*60}")
+        logger.info(f"  Tokens:        input={g_usage.get('input_tokens', 0):,}, "
+                    f"cached={g_usage.get('cached_tokens', 0):,}, "
+                    f"output={g_usage.get('output_tokens', 0):,}")
+    logger.info(f"{'='*60}")
 
 
 def write_cost_breakdown_file(cost_breakdown: dict, output_dir: Path) -> None:
     """Write cost breakdown to cost_breakdown.json."""
     cost_file = output_dir / "cost_breakdown.json"
     cost_file.write_text(json.dumps(cost_breakdown, indent=2))
-    print(f"Wrote cost breakdown to: {cost_file}")
+    logger.info(f"Wrote cost breakdown to: {cost_file}")
 
 
 # ── Transcript security check ────────────────────────────────────────────
@@ -435,6 +438,12 @@ def build_submission(
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
     script_dir = Path(__file__).resolve().parent
     data_dir = script_dir / "data"
     results_dir = script_dir / "gemini-cli-solver" / "results" / "latest"
@@ -444,49 +453,49 @@ def main() -> None:
     if results_dir.is_symlink():
         results_dir = results_dir.resolve()
 
-    print(f"Results dir: {results_dir}")
+    logger.info(f"Results dir: {results_dir}")
 
     # Load results
     solver_grids = load_solver_grids(results_dir)
-    print(f"Loaded {len(solver_grids)} tasks from Gemini CLI solver")
+    logger.info(f"Loaded {len(solver_grids)} tasks from Gemini CLI solver")
 
     # Load ground truth
     ground_truth = load_ground_truth(data_dir)
 
     # Build submission
     submission = build_submission(solver_grids, ground_truth)
-    print(f"Built submission with {len(submission)} tasks")
+    logger.info(f"Built submission with {len(submission)} tasks")
 
     # Score
     if ground_truth:
         arc_mean, num_scored, perfect = score_submission(submission, ground_truth)
-        print(f"\n{'='*60}")
-        print(f"ARC-mean score: {arc_mean * 100:.2f}% ({arc_mean * num_scored:.2f}/{num_scored})")
-        print(f"Perfect tasks:  {perfect}/{num_scored}")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"ARC-mean score: {arc_mean * 100:.2f}% ({arc_mean * num_scored:.2f}/{num_scored})")
+        logger.info(f"Perfect tasks:  {perfect}/{num_scored}")
+        logger.info(f"{'='*60}")
 
     # Cost breakdown
-    print(f"\n{'='*60}")
-    print("Extracting cost breakdown...")
+    logger.info(f"\n{'='*60}")
+    logger.info("Extracting cost breakdown...")
     cost_breakdown = extract_cost_breakdown(results_dir, num_tasks=len(ground_truth))
     print_cost_report(cost_breakdown)
     write_cost_breakdown_file(cost_breakdown, script_dir)
 
     # Security: check transcripts for API key access attempts
-    print(f"\n{'='*60}")
-    print("Checking transcripts for suspicious patterns...")
+    logger.info(f"\n{'='*60}")
+    logger.info("Checking transcripts for suspicious patterns...")
     security_warnings = check_transcripts(results_dir)
     if security_warnings:
-        print(f"\n  WARNING: {len(security_warnings)} suspicious pattern(s) found:")
+        logger.info(f"\n  WARNING: {len(security_warnings)} suspicious pattern(s) found:")
         for w in security_warnings:
-            print(f"    {w}")
+            logger.info(f"    {w}")
     else:
-        print("  Clean — no suspicious patterns found.")
-    print(f"{'='*60}")
+        logger.info("  Clean — no suspicious patterns found.")
+    logger.info(f"{'='*60}")
 
     # Write submission
     output_path.write_text(json.dumps(submission))
-    print(f"\nWrote submission to: {output_path}")
+    logger.info(f"\nWrote submission to: {output_path}")
 
 
 if __name__ == "__main__":

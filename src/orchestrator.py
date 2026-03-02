@@ -20,6 +20,7 @@ from pathlib import Path
 
 from src.cli_impl import get_cli_impl, CLIImpl
 from src.backends import get_backend_runner
+from src.utils.logging import setup_logging
 
 ROOT = Path(__file__).resolve().parent
 CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
@@ -72,9 +73,12 @@ def write_agent_logs(result: dict, task_id: str, log_dir: Path, cli_impl: CLIImp
     log_dir.mkdir(parents=True, exist_ok=True)
     raw_lines: list[str] = result.get("raw_lines", [])
 
-    with open(log_dir / "raw_stream.jsonl", "w") as f:
-        for line in raw_lines:
-            f.write(line + "\n")
+    # raw_stream.jsonl might have been written live by the backend
+    raw_stream_path = log_dir / "raw_stream.jsonl"
+    if not raw_stream_path.exists() and raw_lines:
+        with open(raw_stream_path, "w") as f:
+            for line in raw_lines:
+                f.write(line + "\n")
 
     transcript_entries = cli_impl.parse_stream_json(raw_lines, task_id)
     with open(log_dir / "transcript.jsonl", "w") as f:
@@ -187,7 +191,8 @@ async def process_task(
         async def _run_with_empty_retry():
             for empty_attempt in range(max_empty_retries + 1):
                 result = await _retry_backend_call(
-                    lambda kw=kwargs: backend_impl.run_agent(**kw), agent_id=agent_id
+                    lambda kw={**kwargs, "log_dir": log_dir}: backend_impl.run_agent(**kw), 
+                    agent_id=agent_id
                 )
                 turns = result.get("turns", 0)
                 attempts = result.get("attempts", [])
@@ -199,13 +204,13 @@ async def process_task(
                         and not error
                         and empty_attempt >= max_empty_retries
                     ):
-                        print(
+                        logger.warning(
                             f"  [empty] {agent_id}: all {max_empty_retries} sandbox "
                             f"retries exhausted, accepting empty result"
                         )
                     return result
                 wait = 10 * (empty_attempt + 1)
-                print(
+                logger.info(
                     f"  [empty] {agent_id}: 0 turns/attempts, retrying sandbox "
                     f"({empty_attempt + 1}/{max_empty_retries}) in {wait}s..."
                 )
@@ -342,7 +347,6 @@ async def run_all(args: argparse.Namespace):
     await backend_impl.setup(ROOT, args.cli)
 
     task_ids = load_task_ids(args.tasks)
-    print(f"Loaded {len(task_ids)} tasks")
 
     if args.resume:
         run_dir = Path(args.resume)
@@ -350,19 +354,21 @@ async def run_all(args: argparse.Namespace):
             run_dir = RESULTS / args.resume
         if not run_dir.exists():
             raise RuntimeError(f"Resume directory not found: {run_dir}")
-        print(f"Resuming run: {run_dir}")
     else:
         run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_name = f"{args.name}_{run_stamp}" if args.name else run_stamp
         run_dir = RESULTS / dir_name
         run_dir.mkdir(parents=True, exist_ok=True)
 
+    setup_logging(run_dir)
+    logger.info(f"Loaded {len(task_ids)} tasks")
+
     RESULTS.mkdir(parents=True, exist_ok=True)
     latest = RESULTS / "latest"
     if latest.is_symlink() or latest.exists():
         latest.unlink()
     latest.symlink_to(run_dir.name)
-    print(f"Run directory: {run_dir}")
+    logger.info(f"Run directory: {run_dir}")
 
     completed_tasks = {}
     task_results_dir = run_dir / "task_results"
@@ -373,12 +379,12 @@ async def run_all(args: argparse.Namespace):
         except Exception:
             pass
     if completed_tasks:
-        print(f"Found {len(completed_tasks)} already-completed tasks, skipping them")
+        logger.info(f"Found {len(completed_tasks)} already-completed tasks, skipping them")
 
     remaining_ids = [tid for tid in task_ids if tid not in completed_tasks]
     if getattr(args, "limit", None):
         remaining_ids = remaining_ids[: args.limit]
-    print(
+    logger.info(
         f"Running {len(remaining_ids)} tasks ({len(task_ids) - len(remaining_ids)} skipped)"
     )
 
@@ -406,7 +412,7 @@ async def run_all(args: argparse.Namespace):
             )
         except Exception as e:
             completed += 1
-            print(f"[{completed}/{len(task_ids)}] ERROR {task_id}: {e}")
+            logger.error(f"[{completed}/{len(task_ids)}] CRASH {task_id}: {e}", exc_info=True)
             return
 
         score = result["score"]
@@ -416,7 +422,7 @@ async def run_all(args: argparse.Namespace):
         all_scores[task_id] = score
         completed += 1
         s, t = score["submitted"], score["total"]
-        print(
+        logger.info(
             f"[{completed}/{len(task_ids)}] {'ok' if s == t else 'XX'} {task_id}  {s}/{t} submitted  ({score.get('elapsed', 0):.0f}s)"
         )
 
@@ -439,6 +445,6 @@ async def run_all(args: argparse.Namespace):
         "tasks": all_scores,
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(
+    logger.info(
         f"\n{'=' * 60}\nDone! {len(task_ids)} tasks, {total_tests} test inputs\nSummary: {run_dir / 'summary.json'}"
     )

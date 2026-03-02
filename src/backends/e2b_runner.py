@@ -28,9 +28,11 @@ async def run_agent(
     whole_task: bool,
     cli_type: str,
     root_path: Path,
+    log_dir: Path,
 ) -> dict:
     from e2b import ALL_TRAFFIC, AsyncSandbox
 
+    # ... (envs setup remains same)
     envs: dict[str, str] = {}
     if cli_type == "opencode":
         kilo_key = os.environ.get("KILO_API_KEY")
@@ -71,8 +73,11 @@ async def run_agent(
             "generativelanguage.googleapis.com",
             "api.github.com",
             "opencode.ai",
-        ],  # Opencode might need Github
+        ],
     }
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    raw_stream_path = log_dir / "raw_stream.jsonl"
 
     sandbox = None
     sandbox_start = time.time()
@@ -88,9 +93,10 @@ async def run_agent(
             break
         except Exception as e:
             if attempt == 4:
+                logger.error(f"  [e2b] {agent_id}: sandbox create failed permanently: {e}")
                 raise
             wait = 2**attempt * 5
-            print(
+            logger.warning(
                 f"  [e2b] {agent_id}: sandbox create failed (attempt {attempt + 1}/5), "
                 f"retrying in {wait}s: {e}"
             )
@@ -105,32 +111,40 @@ async def run_agent(
         for f in (root_path / "cli_impl").glob("*.py"):
             await sandbox.files.write(f"/app/cli_impl/{f.name}", f.read_text())
 
+        raw_f = open(raw_stream_path, "a")
+
         def on_stdout(output) -> None:
             line = output.line if hasattr(output, "line") else str(output)
             try:
                 event = json.loads(line)
                 if isinstance(event, dict):
-                    evt_type = event.get("event", "?")
-                    aid = event.get("agent_id", "?")
-                    formatter = _EVENT_FORMATTERS.get(evt_type)
-                    if formatter:
-                        detail = formatter(event)
-                        print(f"  [status] {aid}: {detail}")
+                    if "event" in event:
+                        evt_type = event.get("event", "?")
+                        aid = event.get("agent_id", "?")
+                        formatter = _EVENT_FORMATTERS.get(evt_type)
+                        if formatter:
+                            detail = formatter(event)
+                            logger.info(f"  [status] {aid}: {detail}")
+                        raw_f.write(line + "\n")
+                        raw_f.flush()
             except (json.JSONDecodeError, TypeError):
                 pass
 
         def on_stderr(output) -> None:
             line = output.line if hasattr(output, "line") else str(output)
             if line.strip():
-                print(f"  [e2b-stderr] {agent_id}: {line[:200]}")
+                logger.error(f"  [e2b-stderr] {agent_id}: {line[:200]}")
 
-        await sandbox.commands.run(
-            "python3 /app/agent_runner.py",
-            user="root",
-            timeout=43200 + 120,
-            on_stdout=on_stdout,
-            on_stderr=on_stderr,
-        )
+        try:
+            await sandbox.commands.run(
+                "python3 /app/agent_runner.py",
+                user="root",
+                timeout=43200 + 120,
+                on_stdout=on_stdout,
+                on_stderr=on_stderr,
+            )
+        finally:
+            raw_f.close()
 
         results_content = await sandbox.files.read("/workspace/results.json")
         result = json.loads(results_content)
@@ -141,7 +155,7 @@ async def run_agent(
         result["backend_duration"] = sandbox_duration
         result["total_cost"] = result.get("cost", 0) + e2b_cost
 
-        print(
+        logger.info(
             f"  [e2b-cost] {agent_id}: API=${result.get('cost', 0):.4f}, "
             f"E2B=${e2b_cost:.4f}, Total=${result['total_cost']:.4f}, "
             f"Duration={sandbox_duration:.1f}s"
@@ -149,6 +163,8 @@ async def run_agent(
         return result
 
     except Exception as e:
+        err_msg = f"E2B sandbox error: {e}"
+        logger.error(f"  [e2b-error] {agent_id}: {err_msg}", exc_info=True)
         sandbox_duration = time.time() - sandbox_start
         e2b_cost = (sandbox_duration / 3600) * E2B_CPU_COUNT * E2B_COST_PER_VCPU_HOUR
         return {
@@ -162,7 +178,7 @@ async def run_agent(
             "backend_duration": sandbox_duration,
             "total_cost": e2b_cost,
             "turns": 0,
-            "error": f"E2B sandbox error: {e}",
+            "error": err_msg,
             "raw_lines": [],
             "stderr": "",
             "usage": {},
