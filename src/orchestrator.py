@@ -343,8 +343,11 @@ async def process_task(
 async def run_all(args: argparse.Namespace):
     backend_impl = get_backend_runner(args.backend)
     cli = get_cli_impl(args.cli)
-
-    await backend_impl.setup(ROOT, args.cli)
+    try:
+        await backend_impl.setup(ROOT, args.cli)
+    except Exception as e:
+        logger.error(f"Failed to setup backend: {e}")
+        return
 
     task_ids = load_task_ids(args.tasks)
 
@@ -353,7 +356,8 @@ async def run_all(args: argparse.Namespace):
         if not run_dir.is_absolute():
             run_dir = RESULTS / args.resume
         if not run_dir.exists():
-            raise RuntimeError(f"Resume directory not found: {run_dir}")
+            logger.error(f"Resume directory not found: {run_dir}")
+            return
     else:
         run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_name = f"{args.name}_{run_stamp}" if args.name else run_stamp

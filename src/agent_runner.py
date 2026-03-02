@@ -14,6 +14,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -63,7 +64,7 @@ def run_with_timeout(fn, arg, timeout=TRANSFORM_TIMEOUT):
 
 def test_transform(
     transform_path: Path, train_examples: list[dict]
-) -> tuple[bool, str, "callable | None"]:
+) -> tuple[bool, str, Callable | None]:
     try:
         spec = importlib.util.spec_from_file_location("transform", str(transform_path))
         if spec is None or spec.loader is None:
@@ -179,7 +180,8 @@ def run_agent(config: dict) -> dict:
             agent_id, raw_task, test_index, impl, seed=seed, whole_task=whole_task
         )
         _status({"event": "started", "model": model})
-
+        time.sleep(10000)
+        exit(0)
         md_name = "AGENTS.md" if "opencode" in cli_type else "GEMINI.md"
         initial_prompt = f"Read {md_name}, then solve the ARC puzzle in task.json."
         feedback = ""

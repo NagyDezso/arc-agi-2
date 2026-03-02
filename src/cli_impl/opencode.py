@@ -83,13 +83,14 @@ class OpenCodeCLI(CLIImpl):
             text=True,
             bufsize=1,
         )
+        if proc.stdin is None or proc.stdout is None or proc.stderr is None:
+            raise ValueError("Failed to open stdin, stdout or stderr")
         proc.stdin.close()
-
         raw_lines = []
         num_turns = 0
         token_stats = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
 
-        for line in proc.stdout:
+        for line in proc.stdout or []:
             line = line.rstrip("\n").rstrip("\r")
             if not line:
                 continue

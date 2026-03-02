@@ -123,6 +123,8 @@ class GeminiCLI(CLIImpl):
             bufsize=1,
             start_new_session=True,  # isolate process group so we can kill the whole tree
         )
+        if proc.stdin is None or proc.stdout is None or proc.stderr is None:
+            raise ValueError("Failed to open stdin, stdout or stderr")
         if stdin_text:
             proc.stdin.write(stdin_text)
         proc.stdin.close()
@@ -131,7 +133,7 @@ class GeminiCLI(CLIImpl):
 
         def _reader():
             try:
-                for line in proc.stdout:
+                for line in proc.stdout or []:
                     line_queue.put(line)
             finally:
                 line_queue.put(None)

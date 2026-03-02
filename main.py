@@ -29,7 +29,7 @@ def main():
     parser.add_argument(
         "--model",
         default="gemini-2.5-flash-lite",
-        help="Model name (e.g., gemini-3.1-pro-preview, minimax-M2.5:free)",
+        help="Model name (e.g., gemini-3.1-pro-preview, kilo/minimax/minimax-m2.5:free)",
     )
     parser.add_argument(
         "--name", default=None, help="Name prefix for results directory"

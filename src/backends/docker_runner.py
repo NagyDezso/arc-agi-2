@@ -16,8 +16,8 @@ from src.orchestrator import _EVENT_FORMATTERS
 logger = logging.getLogger(__name__)
 
 DOCKER_IMAGE = os.environ.get("ARC_SOLVER_DOCKER_IMAGE", "arc-solver:latest")
-DOCKER_CPU_COUNT = os.environ.get("ARC_SOLVER_DOCKER_CPUS", "2")
-DOCKER_MEMORY = os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "4g")
+DOCKER_CPU_COUNT = os.environ.get("ARC_SOLVER_DOCKER_CPUS", "1")
+DOCKER_MEMORY = os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "1g")
 
 _DOCKER_CLIENT = None
 

@@ -13,4 +13,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = []
+dev = [
+    "e2b>=2.14.0",
+    "numpy>=2.4.2",
+]
