@@ -74,6 +74,33 @@ def run_with_timeout(fn, arg, timeout=TRANSFORM_TIMEOUT):
     return value
 
 
+def _format_diff(expected: np.ndarray, actual: np.ndarray) -> str:
+    """Format expected vs actual diff for feedback."""
+    lines = []
+    if expected.shape != actual.shape:
+        lines.append(f"Shape mismatch: expected {expected.shape}, got {actual.shape}")
+    else:
+        diff_mask = expected != actual
+        n_diff = int(np.sum(diff_mask))
+        lines.append(f"Value mismatch: {n_diff} cell(s) differ")
+        if n_diff > 0:
+            diff_where = np.argwhere(diff_mask)
+            shown = min(len(diff_where), 10)
+            lines.append("First differing cells (row, col): expected -> actual:")
+            for idx in range(shown):
+                r, c = diff_where[idx]
+                lines.append(f"  ({r},{c}): {expected[r, c]} -> {actual[r, c]}")
+            if n_diff > shown:
+                lines.append(f"  ... and {n_diff - shown} more")
+    lines.append("")
+    lines.append("Expected output:")
+    lines.append(np.array2string(expected, max_line_width=120, threshold=100))
+    lines.append("")
+    lines.append("Your output:")
+    lines.append(np.array2string(actual, max_line_width=120, threshold=100))
+    return "\n".join(lines)
+
+
 def test_transform(
     transform_path: Path, train_examples: list[dict]
 ) -> tuple[bool, str, Callable | None]:
@@ -95,26 +122,27 @@ def test_transform(
         expected = np.array(ex["output"], dtype=int)
         try:
             result = run_with_timeout(fn, inp.copy())
-        except Exception:
+        except Exception as e:
             return (
                 False,
-                "Your transform function doesn't pass the training examples. "
+                f"Training example {i} (0-indexed): transform raised {type(e).__name__}: {e}\n"
                 "Try a fundamentally different approach.",
                 None,
             )
         if not isinstance(result, np.ndarray):
             return (
                 False,
-                "Your transform function doesn't pass the training examples. "
+                f"Training example {i} (0-indexed): transform returned {type(result).__name__}, expected np.ndarray.\n"
                 "Try a fundamentally different approach.",
                 None,
             )
         result = result.astype(int)
         if not np.array_equal(result, expected):
+            diff = _format_diff(expected, result)
             return (
                 False,
-                "Your transform function doesn't pass the training examples. "
-                "Try a fundamentally different approach.",
+                f"Training example {i} (0-indexed) failed.\n{diff}\n"
+                "Fix the transform to match expected output.",
                 None,
             )
 
@@ -193,7 +221,6 @@ def run_agent(config: dict) -> dict:
         feedback = ""
         iteration = 0
         session_started = False
-
         while iteration < max_iterations:
             _status(
                 {
