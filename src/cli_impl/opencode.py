@@ -6,7 +6,6 @@ from typing import Optional, List, Any
 from .base import CLIImpl
 
 
-
 _TOOL_NAME_MAP = {
     "bash": "Bash",
     "read": "Read",
@@ -18,18 +17,22 @@ _TOOL_NAME_MAP = {
     "task": "Task",
 }
 
+
 class OpenCodeCLI(CLIImpl):
     def setup_workspace(
-        self, ws_path: Path, raw_task: dict, test_index: int, seed: int = 0, whole_task: bool = False
+        self,
+        ws_path: Path,
+        raw_task: dict,
+        test_index: int,
+        seed: int = 0,
+        whole_task: bool = False,
     ):
         pass
 
     def workspace_extras(self, ws_path: Path):
         pass
 
-    def calculate_cost(
-        self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int
-    ) -> float:
+    def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
         return 0.0
 
     def run_session(
@@ -43,25 +46,31 @@ class OpenCodeCLI(CLIImpl):
         task_id: str,
         test_index: int,
         _status_cb: Any,
-    ) -> tuple[List[str], int, str, dict, bool]:
-        # Returns (raw_lines, turns, stderr, stats, session_started_now)
-        cmd_args = ["run", "--format", "json"]
+    ) -> tuple[list[str], int, str, dict, bool]:
+
+        cmd = ["opencode", "run", "--format", "json"]
         if iteration == 0:
-            cmd_args.extend(
-                ["--model", model, "--title", f"ARC-{task_id}-t{test_index}", initial_prompt]
+            cmd.extend(
+                [
+                    "--model",
+                    model,
+                    "--title",
+                    f"ARC-{task_id}-t{test_index}",
+                    initial_prompt,
+                ]
             )
         else:
-            cmd_args.extend(["--continue", feedback])
+            cmd.extend(["--continue", feedback])
 
-        full_cmd = ["opencode"] + cmd_args
         proc = subprocess.Popen(
-            full_cmd,
+            cmd,
             cwd=str(ws_path),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
             raise ValueError("Failed to open stdin, stdout or stderr")
@@ -112,7 +121,13 @@ class OpenCodeCLI(CLIImpl):
                     fpath = inp.get("filePath", inp.get("file_path", "")).lower()
                     if not fpath.endswith(".py") and any(
                         kw in fpath
-                        for kw in ("output", "answer", "result", "solution", "submission")
+                        for kw in (
+                            "output",
+                            "answer",
+                            "result",
+                            "solution",
+                            "submission",
+                        )
                     ):
                         content = inp.get("content", "")
                         all_text += content + "\n"
@@ -149,11 +164,7 @@ class OpenCodeCLI(CLIImpl):
                                     isinstance(parsed, list)
                                     and len(parsed) > 0
                                     and all(isinstance(row, list) for row in parsed)
-                                    and all(
-                                        isinstance(v, int) and 0 <= v <= 9
-                                        for row in parsed
-                                        for v in row
-                                    )
+                                    and all(isinstance(v, int) and 0 <= v <= 9 for row in parsed for v in row)
                                 ):
                                     grids.append(parsed)
                             except (json.JSONDecodeError, TypeError):
@@ -180,7 +191,10 @@ class OpenCodeCLI(CLIImpl):
         if tool_lower == "glob":
             return {"pattern": params.get("pattern", "")}
         if tool_lower == "grep":
-            return {"pattern": params.get("pattern", ""), "path": params.get("path", "")}
+            return {
+                "pattern": params.get("pattern", ""),
+                "path": params.get("path", ""),
+            }
         return params
 
     def parse_stream_json(self, raw_lines: List[str], task_id: str) -> List[dict]:
@@ -194,7 +208,11 @@ class OpenCodeCLI(CLIImpl):
             if current_blocks:
                 turn_counter += 1
                 entries.append(
-                    {"type": "assistant", "turn": turn_counter, "content": current_blocks}
+                    {
+                        "type": "assistant",
+                        "turn": turn_counter,
+                        "content": current_blocks,
+                    }
                 )
                 current_blocks = []
 
@@ -289,9 +307,7 @@ class OpenCodeCLI(CLIImpl):
             inp = state.get("input", {})
             output = state.get("output", "")
             if tool_name.lower() == "bash":
-                rf.write(
-                    f"\n\n**Tool: {tool_name}**\n```\n$ {inp.get('command', '')}\n```\n\n"
-                )
+                rf.write(f"\n\n**Tool: {tool_name}**\n```\n$ {inp.get('command', '')}\n```\n\n")
             else:
                 input_str = json.dumps(inp, indent=2)[:500]
                 rf.write(f"\n\n**Tool: {tool_name}**\n```\n{input_str}\n```\n\n")

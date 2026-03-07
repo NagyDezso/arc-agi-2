@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import docker
-from docker.errors import BuildError, DockerException, ImageNotFound
+from docker.errors import DockerException
 
 from src.orchestrator import _EVENT_FORMATTERS
 
@@ -34,23 +34,6 @@ def _get_docker_client() -> docker.DockerClient:
     return _DOCKER_CLIENT
 
 
-def cleanup_containers() -> None:
-    try:
-        client = _get_docker_client()
-        containers = client.containers.list(all=True, filters={"name": "arc-agent"})
-        for c in containers:
-            try:
-                c.stop(timeout=2)
-            except DockerException:
-                pass
-            try:
-                c.remove(force=True)
-            except DockerException:
-                pass
-    except DockerException as e:
-        logger.warning(f"Cleanup failed: {e}")
-
-
 def _cpu_to_nano_cpus(cpu_value: str) -> int:
     return int(float(cpu_value) * 1_000_000_000)
 
@@ -72,25 +55,14 @@ def _handle_status_stdout_line(line: str) -> None:
 def _ensure_docker_image_sync(root_path: Path, cli_type: str) -> None:
     client = _get_docker_client()
     image_tag = f"arc-solver-{cli_type}:latest"
-    try:
-        client.images.get(image_tag)
-        return
-    except ImageNotFound:
-        pass
-
     logger.info(f"Building Docker image '{image_tag}' ...")
     dockerfile = f"Dockerfile.{cli_type}"
-    try:
-        client.images.build(
-            path=str(root_path),
-            dockerfile=str(root_path / dockerfile),
-            tag=image_tag,
-            rm=True,
-        )
-    except BuildError as e:
-        raise RuntimeError(f"Docker image build failed for {image_tag}: {e}") from e
-    except DockerException as e:
-        raise RuntimeError(f"Docker image build failed for {image_tag}: {e}") from e
+    client.images.build(
+        path=str(root_path),
+        dockerfile=str(root_path / dockerfile),
+        tag=image_tag,
+        rm=True,
+    )
 
 
 async def setup(root_path: Path, cli_type: str):
@@ -165,11 +137,15 @@ def _run_agent_container_sync(
         exit_code = int(wait_result.get("StatusCode", -1))
         results_path = run_root / "results.json"
         if not results_path.exists():
-            return {
-                "error": f"Docker run finished with code {exit_code}, no results.json.",
-                "attempts": [],
-                "turns": 0,
-            }, stderr_lines, exit_code
+            return (
+                {
+                    "error": f"Docker run finished with code {exit_code}, no results.json.",
+                    "attempts": [],
+                    "turns": 0,
+                },
+                stderr_lines,
+                exit_code,
+            )
         result = json.loads(results_path.read_text())
         return result, stderr_lines, exit_code
     finally:
@@ -229,9 +205,7 @@ async def run_agent(
     }
 
     run_root = Path(tempfile.mkdtemp(prefix=f"arc-agent-{agent_id[:24]}-"))
-    container_name = _sanitize_container_name(
-        f"arc-agent-{agent_id}-{int(time.time())}"
-    )
+    container_name = _sanitize_container_name(f"arc-agent-{agent_id}-{int(time.time())}")
     run_start = time.time()
 
     try:

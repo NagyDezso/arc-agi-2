@@ -10,17 +10,17 @@ The orchestrator runs locally and handles:
 
 import argparse
 import asyncio
-from datetime import datetime
 import json
 import logging
 import os
 import random
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
-from src.cli_impl import get_cli_impl, CLIImpl
 from src.backends import get_backend_runner
-from src.utils.logging import setup_logging
+from src.cli_impl import CLIImpl, get_cli_impl
+from src.logger import setup_logging
 
 ROOT = Path(__file__).resolve().parent
 CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
@@ -28,16 +28,12 @@ RESULTS = ROOT / "results"
 
 _EVENT_FORMATTERS: dict[str, Callable[[dict], str]] = {
     "started": lambda e: f"started (model={e.get('model', '?')})",
-    "iteration": lambda e: (
-        f"iteration {e.get('iteration', '?')}/{e.get('max_iterations', '?')}"
-    ),
+    "iteration": lambda e: f"iteration {e.get('iteration', '?')}/{e.get('max_iterations', '?')}",
     "transform_validation": lambda e: (
         f"transform {'PASS' if e.get('all_pass') else 'FAIL'} (iter {e.get('iteration', '?')})"
     ),
     "submitted": lambda e: f"submit #{e.get('attempt', '?')}",
-    "done": lambda e: (
-        f"done — {e.get('attempts', 0)} attempts, {e.get('elapsed', '?')}s"
-    ),
+    "done": lambda e: f"done — {e.get('attempts', 0)} attempts, {e.get('elapsed', '?')}s",
     "results_written": lambda e: "results written",
     "error": lambda e: f"ERROR: {e.get('msg', '')}",
 }
@@ -145,16 +141,12 @@ async def _retry_backend_call(coro_fn, *, agent_id: str) -> dict:
             backoff = min(INITIAL_BACKOFF_S * (2 ** (attempt - 1)), MAX_BACKOFF_S)
             jitter = random.uniform(0, backoff * 0.5)
             wait = backoff + jitter
-            logger.warning(
-                f"[{agent_id}] Attempt {attempt}/{MAX_RETRIES} failed: {e} — retrying in {wait:.1f}s"
-            )
+            logger.warning(f"[{agent_id}] Attempt {attempt}/{MAX_RETRIES} failed: {e} — retrying in {wait:.1f}s")
             await asyncio.sleep(wait)
     raise RuntimeError(f"[{agent_id}] All {MAX_RETRIES} retries exhausted")
 
 
-def _write_agent_result(
-    run_dir: Path, task_id: str, agent_id: str, agent_data: dict
-) -> None:
+def _write_agent_result(run_dir: Path, task_id: str, agent_id: str, agent_data: dict) -> None:
     task_results_dir = run_dir / "task_results"
     task_results_dir.mkdir(exist_ok=True)
     task_file = task_results_dir / f"{task_id}.json"
@@ -171,6 +163,41 @@ def _write_agent_result(
     os.rename(str(tmp_file), str(task_file))
 
 
+async def _run_agent_with_empty_retry(
+    agent_id: str,
+    kwargs: dict,
+    log_dir: Path,
+    backend_impl,
+    _retry_backend_call: Callable,
+) -> dict:
+    max_empty_retries = 3
+
+    for empty_attempt in range(max_empty_retries + 1):
+        result = await _retry_backend_call(
+            lambda kw={**kwargs, "log_dir": log_dir}: backend_impl.run_agent(**kw),
+            agent_id=agent_id,
+        )
+        turns = result.get("turns", 0)
+        attempts = result.get("attempts", [])
+        error = result.get("error")
+
+        if turns > 0 or len(attempts) > 0 or error or empty_attempt >= max_empty_retries:
+            if turns == 0 and len(attempts) == 0 and not error and empty_attempt >= max_empty_retries:
+                logger.warning(
+                    f"  [empty] {agent_id}: all {max_empty_retries} sandbox retries exhausted, accepting empty result"
+                )
+            return result
+
+        wait = 10 * (empty_attempt + 1)
+        logger.info(
+            f"  [empty] {agent_id}: 0 turns/attempts, retrying sandbox "
+            f"({empty_attempt + 1}/{max_empty_retries}) in {wait}s..."
+        )
+        await asyncio.sleep(wait)
+
+    return result
+
+
 async def process_task(
     task_id: str,
     args: argparse.Namespace,
@@ -183,27 +210,20 @@ async def process_task(
     num_tests = len(raw_task["test"])
     agent_metas = []
 
-    async def _dispatch(
-        agent_id: str, kwargs: dict, test_index: int, log_dir: Path
-    ) -> dict:
+    async def _dispatch(agent_id: str, kwargs: dict, test_index: int, log_dir: Path) -> dict:
         max_empty_retries = 3
 
         async def _run_with_empty_retry():
             for empty_attempt in range(max_empty_retries + 1):
                 result = await _retry_backend_call(
-                    lambda kw={**kwargs, "log_dir": log_dir}: backend_impl.run_agent(**kw), 
-                    agent_id=agent_id
+                    lambda kw={**kwargs, "log_dir": log_dir}: backend_impl.run_agent(**kw),
+                    agent_id=agent_id,
                 )
                 turns = result.get("turns", 0)
                 attempts = result.get("attempts", [])
                 error = result.get("error")
                 if turns > 0 or len(attempts) > 0 or error or empty_attempt >= max_empty_retries:
-                    if (
-                        turns == 0
-                        and len(attempts) == 0
-                        and not error
-                        and empty_attempt >= max_empty_retries
-                    ):
+                    if turns == 0 and len(attempts) == 0 and not error and empty_attempt >= max_empty_retries:
                         logger.warning(
                             f"  [empty] {agent_id}: all {max_empty_retries} sandbox "
                             f"retries exhausted, accepting empty result"
@@ -346,7 +366,7 @@ async def run_all(args: argparse.Namespace):
     try:
         await backend_impl.setup(ROOT, args.cli)
     except Exception as e:
-        logger.error(f"Failed to setup backend: {e}")
+        logger.error(f"Failed to setup {args.backend}: {e}")
         return
 
     task_ids = load_task_ids(args.tasks)
@@ -372,7 +392,7 @@ async def run_all(args: argparse.Namespace):
     if latest.is_symlink() or latest.exists():
         latest.unlink()
     latest.symlink_to(run_dir.name)
-    logger.info(f"Run directory: {run_dir}")
+    logger.debug(f"Run directory: {run_dir}")
 
     completed_tasks = {}
     task_results_dir = run_dir / "task_results"
@@ -380,17 +400,15 @@ async def run_all(args: argparse.Namespace):
     for f in task_results_dir.glob("*.json"):
         try:
             completed_tasks[f.stem] = json.loads(f.read_text())
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError):
+            logger.exception(f"Failed to load completed task results from {f}")
     if completed_tasks:
         logger.info(f"Found {len(completed_tasks)} already-completed tasks, skipping them")
 
     remaining_ids = [tid for tid in task_ids if tid not in completed_tasks]
     if getattr(args, "limit", None):
         remaining_ids = remaining_ids[: args.limit]
-    logger.info(
-        f"Running {len(remaining_ids)} tasks ({len(task_ids) - len(remaining_ids)} skipped)"
-    )
+    logger.info(f"Running {len(remaining_ids)} tasks ({len(task_ids) - len(remaining_ids)} skipped)")
 
     all_scores = {}
     total_submitted, total_tests, total_cost = 0, 0, 0.0
@@ -408,15 +426,13 @@ async def run_all(args: argparse.Namespace):
         for _ in range(args.concurrency):
             backend_queue.put_nowait("slot")
 
-    async def _process_and_report(task_id: str):
+    async def _process_and_report(task_id: str) -> None:
         nonlocal completed, total_submitted, total_tests, total_cost
         try:
-            result = await process_task(
-                task_id, args, run_dir, backend_queue, backend_impl, cli
-            )
-        except Exception as e:
+            result = await process_task(task_id, args, run_dir, backend_queue, backend_impl, cli)
+        except Exception:
             completed += 1
-            logger.error(f"[{completed}/{len(task_ids)}] CRASH {task_id}: {e}", exc_info=True)
+            logger.exception(f"[{completed}/{len(task_ids)}] CRASH {task_id}")
             return
 
         score = result["score"]
@@ -427,13 +443,12 @@ async def run_all(args: argparse.Namespace):
         completed += 1
         s, t = score["submitted"], score["total"]
         logger.info(
-            f"[{completed}/{len(task_ids)}] {'ok' if s == t else 'XX'} {task_id}  {s}/{t} submitted  ({score.get('elapsed', 0):.0f}s)"
+            f"[{completed}/{len(task_ids)}] {'ok' if s == t else 'XX'} {task_id}  "
+            f"{s}/{t} submitted  ({score.get('elapsed', 0):.0f}s)"
         )
 
     random.shuffle(remaining_ids)
-    await asyncio.gather(
-        *[_process_and_report(tid) for tid in remaining_ids], return_exceptions=True
-    )
+    await asyncio.gather(*[_process_and_report(tid) for tid in remaining_ids], return_exceptions=True)
 
     summary = {
         "cli": args.cli,

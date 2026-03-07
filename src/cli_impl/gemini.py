@@ -1,9 +1,6 @@
 import json
-import os
 import queue
 import re
-import shlex
-import signal
 import subprocess
 import threading
 import time
@@ -49,6 +46,7 @@ _TOOL_NAME_MAP = {
     "list_directory": "Glob",
 }
 
+
 class GeminiCLI(CLIImpl):
     def workspace_extras(self, ws_path: Path):
         gemini_dir = ws_path / ".gemini"
@@ -77,9 +75,7 @@ class GeminiCLI(CLIImpl):
         )
         (gemini_dir / "settings.json").write_text(settings)
 
-    def calculate_cost(
-        self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int
-    ) -> float:
+    def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
         pricing = GEMINI_PRICING.get(model)
         if pricing is None:
             return 0.0
@@ -101,23 +97,28 @@ class GeminiCLI(CLIImpl):
         task_id: str,
         test_index: int,
         _status_cb: Any,
-    ) -> tuple[List[str], int, str, dict, bool]:
-        gemini_cmd_base = f"gemini -y -m {model} -o stream-json"
-        if not session_started:
-            cmd_str = f"{gemini_cmd_base} -p {shlex.quote(initial_prompt)}"
+    ) -> tuple[list[str], int, str, dict, bool]:
+        cmd = ["gemini", "-y", "-m", model, "-o", "stream-json"]
+        if iteration == 0:
+            cmd.extend(["-p", initial_prompt])
             stdin_text = None
         else:
-            cmd_str = f"{gemini_cmd_base} --resume latest"
+            cmd.extend(["--resume", "latest"])
             stdin_text = feedback
 
-        full_cmd = f"cd {ws_path} && {cmd_str}"
+        raw_lines = []
+        num_turns = 0
+        token_stats = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
+
         proc = subprocess.Popen(
-            ["bash", "-c", full_cmd],
+            cmd,
+            cwd=str(ws_path),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            shell=True,
             start_new_session=True,  # isolate process group so we can kill the whole tree
         )
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
@@ -138,9 +139,6 @@ class GeminiCLI(CLIImpl):
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
 
-        raw_lines = []
-        num_turns = 0
-        token_stats = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
         session_start_time = time.time()
         session_timeout = 10800
 
@@ -168,7 +166,7 @@ class GeminiCLI(CLIImpl):
         while True:
             remaining = session_timeout - (time.time() - session_start_time)
             if remaining <= 0:
-                os.killpg(proc.pid, signal.SIGTERM)  # kill entire process tree
+                proc.terminate()
                 break
             try:
                 line = line_queue.get(timeout=min(remaining, 60))
@@ -192,7 +190,7 @@ class GeminiCLI(CLIImpl):
             proc.wait(timeout=30)
             stderr_text = proc.stderr.read()
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)  # SIGKILL entire tree as last resort
+            proc.kill()
             proc.wait()
             try:
                 stderr_text = proc.stderr.read()
@@ -206,7 +204,7 @@ class GeminiCLI(CLIImpl):
 
         return raw_lines, num_turns, stderr_text, token_stats, True
 
-    def extract_grid_from_output(self, raw_lines: List[str]) -> Optional[List[List[int]]]:
+    def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         write_file_text = ""
         tool_result_text = ""
 
@@ -222,8 +220,7 @@ class GeminiCLI(CLIImpl):
             ):
                 fpath = obj.get("parameters", {}).get("file_path", "").lower()
                 if not fpath.endswith(".py") and any(
-                    kw in fpath
-                    for kw in ("output", "answer", "result", "solution", "submission")
+                    kw in fpath for kw in ("output", "answer", "result", "solution", "submission")
                 ):
                     write_file_text += obj.get("parameters", {}).get("content", "") + "\n"
             elif evt_type == "tool_result":
@@ -236,7 +233,7 @@ class GeminiCLI(CLIImpl):
             return grid
         return self._find_last_grid(tool_result_text)
 
-    def _find_last_grid(self, text: str) -> Optional[List[List[int]]]:
+    def _find_last_grid(self, text: str) -> list[list[int]] | None:
         if not text:
             return None
         grids = []
@@ -258,11 +255,7 @@ class GeminiCLI(CLIImpl):
                                     isinstance(parsed, list)
                                     and len(parsed) > 0
                                     and all(isinstance(row, list) for row in parsed)
-                                    and all(
-                                        isinstance(v, int) and 0 <= v <= 9
-                                        for row in parsed
-                                        for v in row
-                                    )
+                                    and all(isinstance(v, int) and 0 <= v <= 9 for row in parsed for v in row)
                                 ):
                                     grids.append(parsed)
                             except (json.JSONDecodeError, TypeError):
@@ -272,7 +265,7 @@ class GeminiCLI(CLIImpl):
             i += 1
         return grids[-1] if grids else None
 
-    def _map_tool_params(self, gemini_name: str, params: dict) -> dict:
+    def _map_tool_params(self, gemini_name: str, params: dict[str, Any]) -> dict[str, Any]:
         if gemini_name == "run_shell_command":
             return {
                 "command": params.get("command", ""),
@@ -295,12 +288,15 @@ class GeminiCLI(CLIImpl):
         if gemini_name == "glob":
             return {"pattern": params.get("pattern", "")}
         if gemini_name == "grep":
-            return {"pattern": params.get("pattern", ""), "path": params.get("path", "")}
+            return {
+                "pattern": params.get("pattern", ""),
+                "path": params.get("path", ""),
+            }
         if gemini_name == "list_directory":
             return {"pattern": params.get("dir_path", "") + "/*"}
         return params
 
-    def _extract_grid_from_submit_cmd(self, cmd: str) -> Optional[List[List[int]]]:
+    def _extract_grid_from_submit_cmd(self, cmd: str) -> list[list[int]] | None:
         match = re.search(r"submit\.py\s+['\"]?(\[.+\])['\"]?\s*$", cmd)
         if match:
             try:
@@ -311,7 +307,7 @@ class GeminiCLI(CLIImpl):
                 pass
         return None
 
-    def parse_stream_json(self, raw_lines: List[str], task_id: str) -> List[dict]:
+    def parse_stream_json(self, raw_lines: list[str], task_id: str) -> list[dict]:
         entries = []
         turn_counter = 0
         current_blocks = []
@@ -328,7 +324,11 @@ class GeminiCLI(CLIImpl):
             if current_blocks:
                 turn_counter += 1
                 entries.append(
-                    {"type": "assistant", "turn": turn_counter, "content": current_blocks}
+                    {
+                        "type": "assistant",
+                        "turn": turn_counter,
+                        "content": current_blocks,
+                    }
                 )
                 current_blocks = []
 
@@ -364,9 +364,7 @@ class GeminiCLI(CLIImpl):
                 viewer_name = _TOOL_NAME_MAP.get(gemini_name, gemini_name)
                 viewer_params = self._map_tool_params(gemini_name, params)
 
-                if gemini_name == "run_shell_command" and "submit.py" in params.get(
-                    "command", ""
-                ):
+                if gemini_name == "run_shell_command" and "submit.py" in params.get("command", ""):
                     cmd = params.get("command", "")
                     grid = self._extract_grid_from_submit_cmd(cmd)
                     if grid is not None:
@@ -442,7 +440,7 @@ class GeminiCLI(CLIImpl):
         flush_assistant()
         return entries
 
-    def write_readable_log(self, rf: Any, line: str, obj: dict):
+    def write_readable_log(self, rf: Any, line: str, obj: dict[str, Any]):
         evt_type = obj.get("type", "")
         if evt_type == "message" and obj.get("role") == "assistant":
             content = obj.get("content", "")

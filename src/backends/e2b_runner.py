@@ -97,16 +97,13 @@ async def run_agent(
                 raise
             wait = 2**attempt * 5
             logger.warning(
-                f"  [e2b] {agent_id}: sandbox create failed (attempt {attempt + 1}/5), "
-                f"retrying in {wait}s: {e}"
+                f"  [e2b] {agent_id}: sandbox create failed (attempt {attempt + 1}/5), retrying in {wait}s: {e}"
             )
             await asyncio.sleep(wait)
 
     try:
         await sandbox.files.write("/root/config.json", json.dumps(config))
-        await sandbox.files.write(
-            "/app/agent_runner.py", (root_path / "agent_runner.py").read_text()
-        )
+        await sandbox.files.write("/app/agent_runner.py", (root_path / "agent_runner.py").read_text())
         await sandbox.files.make_dir("/app/cli_impl")
         for f in (root_path / "cli_impl").glob("*.py"):
             await sandbox.files.write(f"/app/cli_impl/{f.name}", f.read_text())

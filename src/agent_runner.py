@@ -63,9 +63,7 @@ def run_with_timeout(fn, arg, timeout=TRANSFORM_TIMEOUT):
     if p.is_alive():
         p.kill()
         p.join()
-        raise TimeoutError(
-            f"Transform execution timed out after {timeout}s (likely infinite loop)"
-        )
+        raise TimeoutError(f"Transform execution timed out after {timeout}s (likely infinite loop)")
     if q.empty():
         raise RuntimeError("Transform process died without returning a result")
     status, value = q.get_nowait()
@@ -101,9 +99,7 @@ def _format_diff(expected: np.ndarray, actual: np.ndarray) -> str:
     return "\n".join(lines)
 
 
-def test_transform(
-    transform_path: Path, train_examples: list[dict]
-) -> tuple[bool, str, Callable | None]:
+def test_transform(transform_path: Path, train_examples: list[dict]) -> tuple[bool, str, Callable | None]:
     try:
         spec = importlib.util.spec_from_file_location("transform", str(transform_path))
         if spec is None or spec.loader is None:
@@ -141,8 +137,7 @@ def test_transform(
             diff = _format_diff(expected, result)
             return (
                 False,
-                f"Training example {i} (0-indexed) failed.\n{diff}\n"
-                "Fix the transform to match expected output.",
+                f"Training example {i} (0-indexed) failed.\n{diff}\nFix the transform to match expected output.",
                 None,
             )
 
@@ -214,9 +209,7 @@ def run_agent(config: dict) -> dict:
 
         ens_match = re.search(r"_ens(\d+)", agent_id)
         seed = int(ens_match.group(1)) if ens_match else 0
-        ws = prepare_workspace(
-            agent_id, raw_task, test_index, impl, seed=seed, whole_task=whole_task
-        )
+        ws = prepare_workspace(agent_id, raw_task, test_index, impl, seed=seed, whole_task=whole_task)
         _status({"event": "started", "model": model})
         feedback = ""
         iteration = 0
@@ -230,7 +223,7 @@ def run_agent(config: dict) -> dict:
                 }
             )
 
-            raw_lines, turns, stderr, stats, session_started_now = impl.run_session(
+            raw_lines, turns, stderr, stats, session_started = impl.run_session(
                 ws_path=ws,
                 model=model,
                 initial_prompt=INSTRUCTION,
@@ -241,7 +234,6 @@ def run_agent(config: dict) -> dict:
                 test_index=test_index,
                 _status_cb=_status,
             )
-            session_started = session_started_now
 
             all_raw_lines.extend(raw_lines)
             total_turns += turns
@@ -251,6 +243,18 @@ def run_agent(config: dict) -> dict:
             if stderr:
                 _status({"event": "error", "msg": stderr})
                 stderr_text += stderr + "\n"
+                # Check for fatal errors that should stop the agent
+                fatal_errors = [
+                    "ModelNotFoundError",
+                    "Invalid model",
+                    "Requested entity was not found",
+                    "The model is not supported",
+                    "Access denied",
+                    "API key not valid",
+                    "QuotaExceeded",
+                ]
+                if any(err in stderr for err in fatal_errors):
+                    break
 
             transform_path = ws / "transform.py"
             if not transform_path.exists():
@@ -259,9 +263,7 @@ def run_agent(config: dict) -> dict:
                     "transform.py with a function transform(grid: np.ndarray) -> np.ndarray."
                 )
             else:
-                all_pass, feedback_text, fn = test_transform(
-                    transform_path, raw_task["train"]
-                )
+                all_pass, feedback_text, fn = test_transform(transform_path, raw_task["train"])
                 _status(
                     {
                         "event": "transform_validation",
@@ -272,8 +274,7 @@ def run_agent(config: dict) -> dict:
 
                 if not all_pass:
                     feedback = (
-                        "Your transform function doesn't pass the training examples. "
-                        "Try again."
+                        "Your transform function doesn't pass the training examples. Try again."
                         if soft_training_feedback
                         else feedback_text
                     )
@@ -284,16 +285,9 @@ def run_agent(config: dict) -> dict:
                         for ti, test_case in enumerate(raw_task["test"]):
                             try:
                                 test_arr = np.array(test_case["input"], dtype=int)
-                                grid = (
-                                    run_with_timeout(fn, test_arr.copy())
-                                    .astype(int)
-                                    .tolist()
-                                )
+                                grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
                             except Exception as e:
-                                feedback = (
-                                    f"Transform passed training but failed on "
-                                    f"test input {ti}: {e}"
-                                )
+                                feedback = f"Transform passed training but failed on test input {ti}: {e}"
                                 all_ok = False
                                 break
                             pending_grids.append({"test_index": ti, "grid": grid})
@@ -313,16 +307,9 @@ def run_agent(config: dict) -> dict:
                         test_input = raw_task["test"][test_index]["input"]
                         try:
                             test_arr = np.array(test_input, dtype=int)
-                            grid = (
-                                run_with_timeout(fn, test_arr.copy())
-                                .astype(int)
-                                .tolist()
-                            )
+                            grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
                         except Exception as e:
-                            feedback = (
-                                f"Transform passed training but failed on "
-                                f"test input: {e}"
-                            )
+                            feedback = f"Transform passed training but failed on test input: {e}"
                         else:
                             attempts_used += 1
                             attempts.append(
@@ -359,9 +346,7 @@ def run_agent(config: dict) -> dict:
                 "attempts": attempts_used,
             }
         )
-        cost = impl.calculate_cost(
-            model, total_input_tokens, total_cached_tokens, total_output_tokens
-        )
+        cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
         return {
             "task_id": task_id,
             "agent_id": agent_id,
@@ -382,9 +367,7 @@ def run_agent(config: dict) -> dict:
 
     except Exception as e:
         elapsed = time.time() - start
-        cost = impl.calculate_cost(
-            model, total_input_tokens, total_cached_tokens, total_output_tokens
-        )
+        cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
         return {
             "task_id": task_id,
             "agent_id": agent_id,

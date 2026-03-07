@@ -25,6 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def define_template() -> Template:
     return (
         Template()
@@ -32,28 +33,33 @@ def define_template() -> Template:
         .apt_install(["curl", "ca-certificates", "gnupg", "jq"])
         .run_cmd("curl -fsSL https://opencode.ai/install | bash", user="root")
         .run_cmd(
-            "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - "
-            "&& apt-get install -y nodejs",
+            "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs",
             user="root",
         )
         .run_cmd("npm install -g @google/gemini-cli", user="root")
-        .pip_install([
-            "numpy", "scipy", "matplotlib", "pandas",
-            "scikit-learn", "scikit-image", "pillow",
-            "sympy", "networkx",
-        ])
+        .pip_install(
+            [
+                "numpy",
+                "scipy",
+                "matplotlib",
+                "pandas",
+                "scikit-learn",
+                "scikit-image",
+                "pillow",
+                "sympy",
+                "networkx",
+            ]
+        )
         .run_cmd("mkdir -p /workspace && mkdir -p /app", user="root")
         .env("PATH", "/root/.local/bin:/root/.opencode/bin:$PATH")
     )
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build E2B template for ARC solver")
-    parser.add_argument("--name", default=TEMPLATE_NAME,
-                        help=f"Template name (default: {TEMPLATE_NAME})")
-    parser.add_argument("--cpu", type=int, default=2,
-                        help="CPU count (default: 2)")
-    parser.add_argument("--memory", type=int, default=8192,
-                        help="Memory in MB (default: 8192)")
+    parser.add_argument("--name", default=TEMPLATE_NAME, help=f"Template name (default: {TEMPLATE_NAME})")
+    parser.add_argument("--cpu", type=int, default=2, help="CPU count (default: 2)")
+    parser.add_argument("--memory", type=int, default=8192, help="Memory in MB (default: 8192)")
     args = parser.parse_args()
 
     template = define_template()
@@ -67,6 +73,7 @@ def main() -> None:
         on_build_logs=default_build_logger(),
     )
     logger.info(f"Template built successfully: {result.template_id} ({args.name})")
+
 
 if __name__ == "__main__":
     main()

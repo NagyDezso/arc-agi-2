@@ -75,11 +75,8 @@ def main():
     )
     args = parser.parse_args()
 
-    try:
-        asyncio.run(run_all(args))
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received, exiting...")
-        sys.exit(130)
+    asyncio.run(run_all(args))
+
 
 
 if __name__ == "__main__":

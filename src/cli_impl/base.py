@@ -1,15 +1,14 @@
 from typing import Protocol, runtime_checkable, Optional, Any, List
 from pathlib import Path
 
+
 @runtime_checkable
 class CLIImpl(Protocol):
     def workspace_extras(self, ws_path: Path) -> None:
         """Applies implementation-specific workspace setup (e.g., settings.json)."""
         ...
 
-    def calculate_cost(
-        self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int
-    ) -> float:
+    def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
         """Calculates the API cost based on token usage."""
         ...
 
