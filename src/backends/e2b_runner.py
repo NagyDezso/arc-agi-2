@@ -13,7 +13,7 @@ E2B_CPU_COUNT = 2
 E2B_COST_PER_VCPU_HOUR = 0.05
 
 
-async def setup(root_path: Path, cli_type: str):
+def setup(root_path: Path, cli_type: str) -> None:
     pass
 
 

@@ -34,10 +34,6 @@ def _get_docker_client() -> docker.DockerClient:
     return _DOCKER_CLIENT
 
 
-def _cpu_to_nano_cpus(cpu_value: str) -> int:
-    return int(float(cpu_value) * 1_000_000_000)
-
-
 def _handle_status_stdout_line(line: str) -> None:
     try:
         event = json.loads(line)
@@ -52,7 +48,7 @@ def _handle_status_stdout_line(line: str) -> None:
         pass
 
 
-def _ensure_docker_image_sync(root_path: Path, cli_type: str) -> None:
+def _ensure_docker_image(root_path: Path, cli_type: str) -> None:
     client = _get_docker_client()
     image_tag = f"arc-solver-{cli_type}:latest"
     logger.info(f"Building Docker image '{image_tag}' ...")
@@ -65,8 +61,8 @@ def _ensure_docker_image_sync(root_path: Path, cli_type: str) -> None:
     )
 
 
-async def setup(root_path: Path, cli_type: str):
-    await asyncio.to_thread(_ensure_docker_image_sync, root_path, cli_type)
+def setup(root_path: Path, cli_type: str) -> None:
+    _ensure_docker_image(root_path, cli_type)
 
 
 def _run_agent_container_sync(
@@ -101,13 +97,10 @@ def _run_agent_container_sync(
         "working_dir": "/workspace",
         "volumes": {str(run_root.resolve()): {"bind": "/workspace", "mode": "rw"}},
         "environment": envs or None,
+        "cpu_count": DOCKER_CPU_COUNT,
         "mem_limit": DOCKER_MEMORY,
         "log_config": {"type": "json-file", "config": {}},
     }
-    try:
-        create_kwargs["nano_cpus"] = _cpu_to_nano_cpus(DOCKER_CPU_COUNT)
-    except ValueError:
-        pass
 
     try:
         container = client.containers.create(**create_kwargs)

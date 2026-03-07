@@ -8,9 +8,8 @@ def get_cli_impl(cli_name: str) -> CLIImpl:
         from .opencode import OpenCodeCLI
 
         return OpenCodeCLI()
-    elif cli_name == "gemini":
+    if cli_name == "gemini":
         from .gemini import GeminiCLI
 
         return GeminiCLI()
-    else:
-        raise ValueError(f"Unknown cli name: {cli_name}")
+    raise ValueError(f"Unknown cli name: {cli_name}")

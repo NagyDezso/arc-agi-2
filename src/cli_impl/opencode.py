@@ -1,10 +1,9 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Any
 
 from .base import CLIImpl
-
 
 _TOOL_NAME_MAP = {
     "bash": "Bash",
@@ -104,7 +103,7 @@ class OpenCodeCLI(CLIImpl):
 
         return raw_lines, num_turns, stderr_text, token_stats, True
 
-    def extract_grid_from_output(self, raw_lines: List[str]) -> Optional[List[List[int]]]:
+    def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         all_text = ""
         for line in raw_lines:
             try:
@@ -142,7 +141,7 @@ class OpenCodeCLI(CLIImpl):
                     all_text += text + "\n"
         return self._find_last_grid(all_text)
 
-    def _find_last_grid(self, text: str) -> Optional[List[List[int]]]:
+    def _find_last_grid(self, text: str) -> list[list[int]] | None:
         if not text:
             return None
         grids = []
@@ -197,7 +196,7 @@ class OpenCodeCLI(CLIImpl):
             }
         return params
 
-    def parse_stream_json(self, raw_lines: List[str], task_id: str) -> List[dict]:
+    def parse_stream_json(self, raw_lines: list[str], task_id: str) -> list[dict]:
         entries = []
         turn_counter = 0
         current_blocks = []

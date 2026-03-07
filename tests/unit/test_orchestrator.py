@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.orchestrator import process_task, run_all
+from src.orchestrator import OrchestrationContext, process_task, run_all
 
 
 class MockCLIImpl:
@@ -232,8 +232,7 @@ async def test_process_task_aggregates_multi_agent_multi_test_results(tmp_path: 
             args,
             run_dir,
             None,
-            backend,
-            MockCLIImpl(),
+            OrchestrationContext(backend_impl=backend, cli_impl=MockCLIImpl()),
         )
 
     assert result["task_id"] == "task_x"
@@ -322,8 +321,7 @@ async def test_process_task_whole_task_counts_submissions_from_multiple_test_ind
             args,
             run_dir,
             None,
-            backend,
-            MockCLIImpl(),
+            OrchestrationContext(backend_impl=backend, cli_impl=MockCLIImpl()),
         )
 
     assert result["score"]["submitted"] == 2
@@ -397,8 +395,7 @@ async def test_process_task_retries_empty_results_until_success(tmp_path: Path) 
                 args,
                 run_dir,
                 None,
-                backend,
-                MockCLIImpl(),
+                OrchestrationContext(backend_impl=backend, cli_impl=MockCLIImpl()),
             )
 
     assert result["score"]["submitted"] == 1
@@ -440,8 +437,7 @@ async def test_process_task_persists_exception_as_agent_error(tmp_path: Path) ->
             args,
             run_dir,
             None,
-            backend,
-            MockCLIImpl(),
+            OrchestrationContext(backend_impl=backend, cli_impl=MockCLIImpl()),
         )
 
     assert result["score"]["submitted"] == 1
@@ -474,8 +470,7 @@ async def test_process_task_respects_backend_queue_concurrency_limit(tmp_path: P
             args,
             run_dir,
             queue,
-            backend,
-            MockCLIImpl(),
+            OrchestrationContext(backend_impl=backend, cli_impl=MockCLIImpl()),
         )
 
     assert result["score"]["submitted"] == 1
@@ -529,8 +524,7 @@ async def test_run_all_skips_completed_tasks_and_writes_summary(tmp_path: Path) 
         args_obj: Any,
         run_dir: Path,
         backend_queue: Any,
-        backend_impl: Any,
-        cli_impl: Any,
+        context: Any,
     ) -> dict[str, Any]:
         processed.append(task_id)
         assert run_dir == resume_dir
@@ -597,8 +591,7 @@ async def test_run_all_continues_after_process_task_crash(tmp_path: Path) -> Non
         args_obj: Any,
         run_dir_arg: Path,
         backend_queue: Any,
-        backend_impl: Any,
-        cli_impl: Any,
+        context: Any,
     ) -> dict[str, Any]:
         if task_id == "task_a":
             raise RuntimeError("boom")

@@ -13,13 +13,12 @@ import random
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 
 from cli_impl import CLIImpl
-
 
 logger = logging.getLogger(__name__)
 

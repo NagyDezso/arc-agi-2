@@ -16,14 +16,24 @@ import json
 import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
+
+from docker.errors import DockerException
 
 from src.backends import get_backend_runner
 from src.cli_impl import CLIImpl, get_cli_impl
 from src.logger import setup_logging
+from src.models import (
+    AgentResultData,
+    AgentRunSpec,
+    OrchestrationContext,
+    TaskProcessConfig,
+    TaskProcessResult,
+    TaskScore,
+    UsageTotals,
+)
 
 ROOT = Path(__file__).resolve().parent
 CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
@@ -49,204 +59,6 @@ MAX_RETRIES = 10
 INITIAL_BACKOFF_S = 2.0
 MAX_BACKOFF_S = 600.0
 MAX_EMPTY_RETRIES = 3
-
-
-class BackendRunner(Protocol):
-    async def setup(self, root_path: Path, cli_type: str) -> None: ...
-    async def run_agent(
-        self,
-        task_id: str,
-        agent_id: str,
-        raw_task: dict[str, Any],
-        test_index: int,
-        model: str,
-        max_iterations: int,
-        soft_training_feedback: bool,
-        whole_task: bool,
-        cli_type: str,
-        root_path: Path,
-        log_dir: Path,
-    ) -> dict[str, Any]: ...
-
-
-@dataclass(frozen=True)
-class TaskProcessConfig:
-    num_agents: int
-    model: str
-    max_iterations: int
-    soft_training_feedback: bool
-    cli: str
-    whole_task: bool = False
-
-    @classmethod
-    def from_args(cls, args: argparse.Namespace) -> TaskProcessConfig:
-        return cls(
-            num_agents=args.num_agents,
-            model=args.model,
-            max_iterations=args.max_iterations,
-            soft_training_feedback=args.soft_training_feedback,
-            cli=args.cli,
-            whole_task=getattr(args, "whole_task", False),
-        )
-
-
-@dataclass(frozen=True)
-class AgentRunSpec:
-    task_id: str
-    agent_id: str
-    test_index: int
-    log_dir: Path
-    raw_task: dict[str, Any]
-    model: str
-    max_iterations: int
-    soft_training_feedback: bool
-    whole_task: bool
-    cli_type: str
-    root_path: Path
-
-
-@dataclass(frozen=True)
-class AgentMeta:
-    agent_id: str
-    test_index: int
-    log_dir: Path
-
-
-@dataclass(frozen=True)
-class AgentAttempt:
-    test_index: int
-    grid: list[list[int]]
-
-
-@dataclass(frozen=True)
-class UsageTotals:
-    input_tokens: int = 0
-    cached_tokens: int = 0
-    output_tokens: int = 0
-
-    def to_dict(self) -> dict[str, int]:
-        return {
-            "input_tokens": self.input_tokens,
-            "cached_tokens": self.cached_tokens,
-            "output_tokens": self.output_tokens,
-        }
-
-
-@dataclass(frozen=True)
-class AgentResultData:
-    agent_id: str
-    test_index: int
-    attempts: tuple[AgentAttempt, ...]
-    cost: float
-    backend_cost: float
-    backend_duration: float
-    total_cost: float
-    turns: int
-    usage: UsageTotals
-    elapsed: float
-    error: str | None = None
-    raw_lines: tuple[str, ...] = ()
-    stderr: str = ""
-
-    @classmethod
-    def from_backend_result(cls, result: Mapping[str, Any], fallback_test_index: int) -> AgentResultData:
-        attempts: list[AgentAttempt] = []
-        for attempt in result.get("attempts", []):
-            grid = attempt.get("grid")
-            if grid is None:
-                continue
-            attempts.append(
-                AgentAttempt(
-                    test_index=attempt.get("test_index", fallback_test_index),
-                    grid=grid,
-                )
-            )
-
-        usage_data = result.get("usage", {})
-        return cls(
-            agent_id=str(result.get("agent_id", "unknown")),
-            test_index=int(result.get("test_index", fallback_test_index)),
-            attempts=tuple(attempts),
-            cost=float(result.get("cost", 0)),
-            backend_cost=float(result.get("backend_cost", 0)),
-            backend_duration=float(result.get("backend_duration", 0)),
-            total_cost=float(result.get("total_cost", 0)),
-            turns=int(result.get("turns", 0)),
-            usage=UsageTotals(
-                input_tokens=int(usage_data.get("input_tokens", 0)),
-                cached_tokens=int(usage_data.get("cached_tokens", 0)),
-                output_tokens=int(usage_data.get("output_tokens", 0)),
-            ),
-            elapsed=float(result.get("elapsed", 0)),
-            error=result.get("error"),
-            raw_lines=tuple(result.get("raw_lines", [])),
-            stderr=str(result.get("stderr", "")),
-        )
-
-    @classmethod
-    def from_exception(cls, agent_id: str, test_index: int, error: BaseException) -> AgentResultData:
-        return cls(
-            agent_id=agent_id,
-            test_index=test_index,
-            attempts=(),
-            cost=0.0,
-            backend_cost=0.0,
-            backend_duration=0.0,
-            total_cost=0.0,
-            turns=0,
-            usage=UsageTotals(),
-            elapsed=0.0,
-            error=str(error),
-        )
-
-    def to_persisted_agent_dict(self) -> dict[str, Any]:
-        data = {
-            "test_index": self.test_index,
-            "attempts": [attempt.grid for attempt in self.attempts],
-            "cost": self.cost,
-            "backend_cost": self.backend_cost,
-            "backend_duration": self.backend_duration,
-            "total_cost": self.total_cost,
-            "turns": self.turns,
-            "usage": self.usage.to_dict(),
-        }
-        if self.error:
-            data["error"] = self.error
-        return data
-
-    def submitted_test_indexes(self) -> set[int]:
-        return {attempt.test_index for attempt in self.attempts}
-
-
-@dataclass(frozen=True)
-class TaskScore:
-    submitted: int
-    total: int
-    elapsed: float
-    api_cost: float
-    backend_cost: float
-    total_cost: float
-    usage: UsageTotals
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "submitted": self.submitted,
-            "total": self.total,
-            "elapsed": self.elapsed,
-            "api_cost": self.api_cost,
-            "backend_cost": self.backend_cost,
-            "total_cost": self.total_cost,
-            "usage": self.usage.to_dict(),
-        }
-
-
-@dataclass(frozen=True)
-class TaskProcessResult:
-    task_id: str
-    score: TaskScore
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"task_id": self.task_id, "score": self.score.to_dict()}
 
 
 def _load_all_tasks() -> dict[str, dict[str, Any]]:
@@ -410,8 +222,8 @@ def _build_agent_specs(
     return specs
 
 
-async def _run_backend_agent(spec: AgentRunSpec, backend_impl: BackendRunner) -> dict[str, Any]:
-    return await backend_impl.run_agent(
+async def _run_backend_agent(spec: AgentRunSpec, context: OrchestrationContext) -> dict[str, Any]:
+    return await context.backend_impl.run_agent(
         task_id=spec.task_id,
         agent_id=spec.agent_id,
         raw_task=spec.raw_task,
@@ -426,12 +238,12 @@ async def _run_backend_agent(spec: AgentRunSpec, backend_impl: BackendRunner) ->
     )
 
 
-async def _run_agent_with_empty_retry(spec: AgentRunSpec, backend_impl: BackendRunner) -> dict[str, Any]:
+async def _run_agent_with_empty_retry(spec: AgentRunSpec, context: OrchestrationContext) -> dict[str, Any]:
     result: dict[str, Any] | None = None
 
     for empty_attempt in range(MAX_EMPTY_RETRIES + 1):
         result = await _retry_backend_call(
-            lambda: _run_backend_agent(spec, backend_impl),
+            lambda: _run_backend_agent(spec, context),
             agent_id=spec.agent_id,
         )
         turns = int(result.get("turns", 0))
@@ -463,19 +275,18 @@ async def _run_agent_spec(
     spec: AgentRunSpec,
     run_dir: Path,
     backend_queue: asyncio.Queue[Any] | None,
-    backend_impl: BackendRunner,
-    cli_impl: CLIImpl,
+    context: OrchestrationContext,
 ) -> AgentResultData:
     if backend_queue is None:
-        raw_result = await _run_agent_with_empty_retry(spec, backend_impl)
+        raw_result = await _run_agent_with_empty_retry(spec, context)
     else:
         token = await backend_queue.get()
         try:
-            raw_result = await _run_agent_with_empty_retry(spec, backend_impl)
+            raw_result = await _run_agent_with_empty_retry(spec, context)
         finally:
             backend_queue.put_nowait(token)
 
-    write_agent_logs(raw_result, spec.task_id, spec.log_dir, cli_impl)
+    write_agent_logs(raw_result, spec.task_id, spec.log_dir, context.cli_impl)
 
     agent_result = AgentResultData.from_backend_result(raw_result, spec.test_index)
     _write_agent_result(
@@ -540,8 +351,7 @@ async def process_task(
     args: argparse.Namespace | TaskProcessConfig,
     run_dir: Path,
     backend_queue: asyncio.Queue[Any] | None,
-    backend_impl: BackendRunner,
-    cli_impl: CLIImpl,
+    context: OrchestrationContext,
 ) -> dict[str, Any]:
     config = args if isinstance(args, TaskProcessConfig) else TaskProcessConfig.from_args(args)
     raw_task = load_task_json(task_id)
@@ -549,7 +359,7 @@ async def process_task(
     specs = _build_agent_specs(task_id, raw_task, run_dir, config)
 
     agent_results = await asyncio.gather(
-        *[_run_agent_spec(spec, run_dir, backend_queue, backend_impl, cli_impl) for spec in specs],
+        *[_run_agent_spec(spec, run_dir, backend_queue, context) for spec in specs],
         return_exceptions=True,
     )
 
@@ -638,41 +448,15 @@ def _build_backend_queue(concurrency: int) -> asyncio.Queue[Any] | None:
     return backend_queue
 
 
-def _write_summary(
-    args: argparse.Namespace,
-    run_dir: Path,
-    task_ids: list[str],
-    total_tests: int,
-    total_cost: float,
-    all_scores: Mapping[str, dict[str, Any]],
-) -> None:
-    summary = {
-        "cli": args.cli,
-        "backend": args.backend,
-        "model": args.model,
-        "num_agents": args.num_agents,
-        "max_iterations": args.max_iterations,
-        "soft_training_feedback": args.soft_training_feedback,
-        "whole_task": getattr(args, "whole_task", False),
-        "num_tasks": len(task_ids),
-        "total_tests": total_tests,
-        "total_cost": round(total_cost, 2),
-        "tasks": dict(all_scores),
-    }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    logger.info(
-        f"\n{'=' * 60}\nDone! {len(task_ids)} tasks, {total_tests} test inputs\nSummary: {run_dir / 'summary.json'}"
-    )
-
-
 async def run_all(args: argparse.Namespace) -> None:
-    backend_impl: BackendRunner = get_backend_runner(args.backend)
-    cli = get_cli_impl(args.cli)
-
+    context = OrchestrationContext(
+        backend_impl=get_backend_runner(args.backend),
+        cli_impl=get_cli_impl(args.cli),
+    )
     try:
-        await backend_impl.setup(ROOT, args.cli)
-    except Exception as error:
-        logger.error(f"Failed to setup {args.backend}: {error}")
+        await context.backend_impl.setup(ROOT, args.cli)
+    except DockerException as e:
+        logger.error(f"Failed to setup {args.backend}: {e}")
         return
 
     task_ids = load_task_ids(args.tasks)
@@ -701,7 +485,7 @@ async def run_all(args: argparse.Namespace) -> None:
     async def process_and_report(task_id: str) -> None:
         nonlocal completed, total_submitted, total_tests, total_cost
         try:
-            result = await process_task(task_id, config, run_dir, backend_queue, backend_impl, cli)
+            result = await process_task(task_id, config, run_dir, backend_queue, context)
         except Exception:
             completed += 1
             logger.exception(f"[{completed}/{len(task_ids)}] CRASH {task_id}")
@@ -723,4 +507,20 @@ async def run_all(args: argparse.Namespace) -> None:
     random.shuffle(remaining_ids)
     await asyncio.gather(*(process_and_report(task_id) for task_id in remaining_ids), return_exceptions=True)
 
-    _write_summary(args, run_dir, task_ids, total_tests, total_cost, all_scores)
+    summary = {
+        "cli": args.cli,
+        "backend": args.backend,
+        "model": args.model,
+        "num_agents": args.num_agents,
+        "max_iterations": args.max_iterations,
+        "soft_training_feedback": args.soft_training_feedback,
+        "whole_task": getattr(args, "whole_task", False),
+        "num_tasks": len(task_ids),
+        "total_tests": total_tests,
+        "total_cost": round(total_cost, 2),
+        "tasks": dict(all_scores),
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    logger.info(
+        f"\n{'=' * 60}\nDone! {len(task_ids)} tasks, {total_tests} test inputs\nSummary: {run_dir / 'summary.json'}"
+    )

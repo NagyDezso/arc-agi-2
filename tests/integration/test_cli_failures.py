@@ -38,9 +38,7 @@ def test_opencode_bad_model_failure():
         if not error_found and len(raw_lines) > 0:
             error_found = any("error" in line.lower() for line in raw_lines)
 
-        assert error_found, (
-            f"Expected an error message for invalid model, got stderr: {stderr}"
-        )
+        assert error_found, f"Expected an error message for invalid model, got stderr: {stderr}"
 
 
 def test_gemini_bad_model_failure():
@@ -75,6 +73,4 @@ def test_gemini_bad_model_failure():
         if not error_found and len(raw_lines) > 0:
             error_found = any("error" in line.lower() for line in raw_lines)
 
-        assert error_found, (
-            f"Expected an error message for invalid model, got stderr: {stderr}"
-        )
+        assert error_found, f"Expected an error message for invalid model, got stderr: {stderr}"

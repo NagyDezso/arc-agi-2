@@ -16,7 +16,6 @@ addopts = "-ra -v"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-include = ["src/**/*.py"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -39,6 +38,7 @@ ignore = [
     "TRY003",  # raise-vanilla-args
     "TRY400",  # error-instead-of-exception
     "G004",    # Logging statement uses f-string
+    "S311",    # Standard pseudo-random generators are not suitable for cryptographic purposes
     "S603",    # `subprocess` call: check for execution of untrusted input
     "DTZ005",  # call-datetime-now-without-tzinfo
 ]
@@ -49,7 +49,6 @@ ignore = [
     "ARG",     # Unused function args -> fixtures nevertheless are functionally relevant...
     "FBT",     # Don't care about booleans as positional arguments in tests, e.g. via @pytest.mark.parametrize()
     "PLR2004", # Magic value used in comparison, ...
-    "S311",    # Standard pseudo-random generators are not suitable for cryptographic purposes
     "ANN201",  # Missing type annotation for argument in function or method
 ]
 

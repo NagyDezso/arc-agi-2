@@ -14,6 +14,7 @@ Usage:
 import argparse
 import logging
 import sys
+
 from e2b import Template, default_build_logger
 
 TEMPLATE_NAME = "arc-solver"

@@ -6,9 +6,8 @@ def get_backend_runner(backend_name: str):
         import src.backends.docker_runner as runner
 
         return runner
-    elif backend_name == "e2b":
+    if backend_name == "e2b":
         import src.backends.e2b_runner as runner
 
         return runner
-    else:
-        raise ValueError(f"Unknown backend name: {backend_name}")
+    raise ValueError(f"Unknown backend name: {backend_name}")

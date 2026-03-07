@@ -241,16 +241,12 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                 "vcpus": 2,
                 "cost_per_vcpu_hour_usd": 0.05,
                 "total_hourly_rate_usd": 0.10,
-                "formula": "(duration_seconds / 3600) * vcpus * cost_per_vcpu_hour"
+                "formula": "(duration_seconds / 3600) * vcpus * cost_per_vcpu_hour",
             },
-            "note": "API costs calculated from Gemini CLI token reports using published pricing"
+            "note": "API costs calculated from Gemini CLI token reports using published pricing",
         },
         "gemini_cli": {},
-        "metadata": {
-            "e2b_vcpus": 2,
-            "e2b_cost_per_vcpu_hour": 0.05,
-            "num_tasks": num_tasks
-        }
+        "metadata": {"e2b_vcpus": 2, "e2b_cost_per_vcpu_hour": 0.05, "num_tasks": num_tasks},
     }
 
     if summary:
@@ -282,10 +278,10 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                     "e2b_cost": round(task.get("e2b_cost", 0.0), 4),
                     "total_cost": round(task.get("total_cost", 0.0), 4),
                     "elapsed_seconds": round(task.get("elapsed", 0.0), 2),
-                    "usage": task.get("usage", {})
+                    "usage": task.get("usage", {}),
                 }
                 for task_id, task in tasks.items()
-            }
+            },
         }
     else:
         # Fallback: aggregate from task_results/*.json
@@ -312,7 +308,7 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                         "usage": t["usage"],
                     }
                     for task_id, t in task_costs.items()
-                }
+                },
             }
         else:
             breakdown["gemini_cli"] = {
@@ -321,7 +317,7 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                 "e2b_cost": 0.0,
                 "total_cost": 0.0,
                 "usage": {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0},
-                "per_task": {}
+                "per_task": {},
             }
 
     return breakdown
@@ -329,9 +325,9 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
 
 def print_cost_report(cost_breakdown: dict) -> None:
     """Print human-readable cost breakdown to console."""
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info("COST BREAKDOWN")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
 
     g = cost_breakdown["gemini_cli"]
     g_usage = g.get("usage", {})
@@ -341,10 +337,12 @@ def print_cost_report(cost_breakdown: dict) -> None:
     logger.info(f"  E2B Infra:     ${g['e2b_cost']:.4f}")
     logger.info(f"  TOTAL:         ${g['total_cost']:.4f}")
     if g_usage:
-        logger.info(f"  Tokens:        input={g_usage.get('input_tokens', 0):,}, "
-                    f"cached={g_usage.get('cached_tokens', 0):,}, "
-                    f"output={g_usage.get('output_tokens', 0):,}")
-    logger.info(f"{'='*60}")
+        logger.info(
+            f"  Tokens:        input={g_usage.get('input_tokens', 0):,}, "
+            f"cached={g_usage.get('cached_tokens', 0):,}, "
+            f"output={g_usage.get('output_tokens', 0):,}"
+        )
+    logger.info(f"{'=' * 60}")
 
 
 def write_cost_breakdown_file(cost_breakdown: dict, output_dir: Path) -> None:
@@ -388,10 +386,7 @@ def check_transcripts(results_dir: Path) -> list[str]:
             for pattern in _COMPILED_PATTERNS:
                 match = pattern.search(line)
                 if match:
-                    warnings.append(
-                        f"[gemini-cli] {rel}:{line_num}: "
-                        f"found '{match.group()}'"
-                    )
+                    warnings.append(f"[gemini-cli] {rel}:{line_num}: found '{match.group()}'")
 
     return warnings
 
@@ -427,10 +422,12 @@ def build_submission(
             pool = tests.get(ti, [])
             top = top_k_vote(pool, k=2)
 
-            preds.append({
-                "attempt_1": top[0] if len(top) >= 1 else [[0]],
-                "attempt_2": top[1] if len(top) >= 2 else [[0]],
-            })
+            preds.append(
+                {
+                    "attempt_1": top[0] if len(top) >= 1 else [[0]],
+                    "attempt_2": top[1] if len(top) >= 2 else [[0]],
+                }
+            )
 
         submission[task_id] = preds
 
@@ -469,20 +466,20 @@ def main() -> None:
     # Score
     if ground_truth:
         arc_mean, num_scored, perfect = score_submission(submission, ground_truth)
-        logger.info(f"\n{'='*60}")
+        logger.info(f"\n{'=' * 60}")
         logger.info(f"ARC-mean score: {arc_mean * 100:.2f}% ({arc_mean * num_scored:.2f}/{num_scored})")
         logger.info(f"Perfect tasks:  {perfect}/{num_scored}")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
     # Cost breakdown
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info("Extracting cost breakdown...")
     cost_breakdown = extract_cost_breakdown(results_dir, num_tasks=len(ground_truth))
     print_cost_report(cost_breakdown)
     write_cost_breakdown_file(cost_breakdown, script_dir)
 
     # Security: check transcripts for API key access attempts
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info("Checking transcripts for suspicious patterns...")
     security_warnings = check_transcripts(results_dir)
     if security_warnings:
@@ -491,7 +488,7 @@ def main() -> None:
             logger.info(f"    {w}")
     else:
         logger.info("  Clean — no suspicious patterns found.")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
 
     # Write submission
     output_path.write_text(json.dumps(submission))

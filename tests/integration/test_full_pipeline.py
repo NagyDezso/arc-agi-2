@@ -1,12 +1,13 @@
-from typing import Any
-import pytest
-from unittest.mock import patch
-from pathlib import Path
 import argparse
 import json
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
-from src.orchestrator import process_task
+import pytest
+
 from src.cli_impl.base import CLIImpl
+from src.orchestrator import OrchestrationContext, process_task
 
 
 class MockBackend:
@@ -85,7 +86,13 @@ async def test_process_task_integration(tmp_path, mock_raw_task_file):
         with open(mock_raw_task_file) as f:
             mock_load.return_value = json.load(f)
 
-        result = await process_task("test_task_id", args, run_dir, None, backend_impl, cli_impl)
+        result = await process_task(
+            "test_task_id",
+            args,
+            run_dir,
+            None,
+            OrchestrationContext(backend_impl=backend_impl, cli_impl=cli_impl),
+        )
 
     # Check result score
     assert result["task_id"] == "test_task_id"

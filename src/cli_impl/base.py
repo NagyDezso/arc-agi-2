@@ -1,5 +1,5 @@
-from typing import Protocol, runtime_checkable, Optional, Any, List
 from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -23,15 +23,15 @@ class CLIImpl(Protocol):
         task_id: str,
         test_index: int,
         _status_cb: Any,
-    ) -> tuple[List[str], int, str, dict, bool]:
+    ) -> tuple[list[str], int, str, dict, bool]:
         """Runs a CLI session and returns (raw_lines, turns, stderr, stats, session_started)."""
         ...
 
-    def extract_grid_from_output(self, raw_lines: List[str]) -> Optional[List[List[int]]]:
+    def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         """Extracts the final grid from the session output lines."""
         ...
 
-    def parse_stream_json(self, raw_lines: List[str], task_id: str) -> List[dict]:
+    def parse_stream_json(self, raw_lines: list[str], task_id: str) -> list[dict]:
         """Parses the raw JSON stream into a transcript format for logging."""
         ...
 
