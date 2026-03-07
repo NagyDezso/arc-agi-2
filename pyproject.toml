@@ -22,10 +22,11 @@ include = ["src/**/*.py"]
 select = ["ALL"]
 ignore = [
     "COM812",  # missing-trailing-comma
-    "CPY001",  # Missing copyright notice at top of file
-    "D100",    # Missing docstring in public module
-    "D103",    # Missing docstring in public function
-    "D104",    # Missing docstring in public package
+    "CPY001",  # missing-copyright-notice
+    "D100",    # missing-docstring-in-public-module
+    "D102",    # undocumented-public-method
+    "D103",    # undocumented-public-function
+    "D104",    # undocumented-public-package
     "D203",    # blank line required before class docstring
     "D211",    # no-blank-line-before-class
     "D213",    # multi-line-summary-second-line
@@ -39,6 +40,7 @@ ignore = [
     "TRY400",  # error-instead-of-exception
     "G004",    # Logging statement uses f-string
     "S603",    # `subprocess` call: check for execution of untrusted input
+    "DTZ005",  # call-datetime-now-without-tzinfo
 ]
 
 [tool.ruff.lint.per-file-ignores]
