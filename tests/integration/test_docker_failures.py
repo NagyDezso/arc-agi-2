@@ -1,13 +1,17 @@
-import pytest
 import tempfile
 from pathlib import Path
-from src.backends.docker_runner import setup, run_agent
+
+import pytest
+
+from src.backends.docker_runner import DockerRunner
+from src.models import AgentRunSpec
 
 
 @pytest.mark.asyncio
 async def test_docker_run_agent_failure():
     # Setup paths
     root_path = Path(__file__).parent.parent.parent / "src"
+    runner = DockerRunner()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         log_dir = Path(tmpdir) / "logs"
@@ -16,21 +20,24 @@ async def test_docker_run_agent_failure():
         raw_task = {"train": [{"input": [[1]], "output": [[1]]}], "test": [{"input": [[1]]}]}
 
         # Ensure docker image exists
-        await setup(root_path, cli_type="opencode")
+        runner.setup(root_path, cli_type="opencode")
 
         # Run agent with an invalid model to trigger an API failure inside the container
-        result = await run_agent(
-            task_id="test_docker_fail",
-            agent_id="agent_docker_fail",
-            raw_task=raw_task,
-            test_index=0,
-            model="invalid/model-does-not-exist",
-            max_iterations=1,
-            soft_training_feedback=False,
-            whole_task=False,
-            cli_type="opencode",
-            root_path=root_path,
-            log_dir=log_dir,
+        result = await runner.run_agent(
+            spec=AgentRunSpec(
+                task_id="test_docker_fail",
+                agent_id="agent_docker_fail",
+                test_index=0,
+                log_dir=log_dir,
+                raw_task=raw_task,
+                model="invalid/model-does-not-exist",
+                envs={},
+                max_iterations=1,
+                soft_training_feedback=False,
+                whole_task=False,
+                cli_type="opencode",
+                root_path=root_path,
+            ),
         )
 
         # Depending on how the error is surfaced, it should be in stderr or error.

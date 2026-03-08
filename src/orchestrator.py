@@ -10,15 +10,14 @@ The orchestrator runs locally and handles:
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import logging
+import os
 import random
-from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from docker.errors import DockerException
 
@@ -35,21 +34,13 @@ from src.models import (
     UsageTotals,
 )
 
+if TYPE_CHECKING:
+    import argparse
+    from collections.abc import Awaitable, Callable, Mapping
+
 ROOT = Path(__file__).resolve().parent
 CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
 RESULTS = ROOT / "results"
-
-_EVENT_FORMATTERS: dict[str, Callable[[dict[str, Any]], str]] = {
-    "started": lambda event: f"started (model={event.get('model', '?')})",
-    "iteration": lambda event: f"iteration {event.get('iteration', '?')}/{event.get('max_iterations', '?')}",
-    "transform_validation": lambda event: (
-        f"transform {'PASS' if event.get('all_pass') else 'FAIL'} (iter {event.get('iteration', '?')})"
-    ),
-    "submitted": lambda event: f"submit #{event.get('attempt', '?')}",
-    "done": lambda event: f"done — {event.get('attempts', 0)} attempts, {event.get('elapsed', '?')}s",
-    "results_written": lambda _event: "results written",
-    "error": lambda event: f"ERROR: {event.get('msg', '')}",
-}
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +176,31 @@ def _write_agent_result(
     tmp_file.replace(task_file)
 
 
+def get_envs(cli_type: str) -> dict[str, str]:
+    envs: dict[str, str] = {}
+    if cli_type == "opencode":
+        kilo_key = os.environ.get("KILO_API_KEY")
+        if kilo_key:
+            envs["KILO_API_KEY"] = kilo_key
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if github_token:
+            envs["GITHUB_TOKEN"] = github_token
+    elif cli_type == "gemini":
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if gemini_key:
+            envs["GEMINI_API_KEY"] = gemini_key
+        gemini_oauth_access = os.environ.get("GEMINI_OAUTH_ACCESS_TOKEN")
+        if gemini_oauth_access:
+            envs["GEMINI_OAUTH_ACCESS_TOKEN"] = gemini_oauth_access
+        gemini_oauth_refresh = os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN")
+        if gemini_oauth_refresh:
+            envs["GEMINI_OAUTH_REFRESH_TOKEN"] = gemini_oauth_refresh
+        gemini_oauth_id = os.environ.get("GEMINI_OAUTH_ID_TOKEN")
+        if gemini_oauth_id:
+            envs["GEMINI_OAUTH_ID_TOKEN"] = gemini_oauth_id
+    return envs
+
+
 def _build_agent_specs(
     task_id: str,
     raw_task: dict[str, Any],
@@ -192,7 +208,7 @@ def _build_agent_specs(
     config: TaskProcessConfig,
 ) -> list[AgentRunSpec]:
     specs: list[AgentRunSpec] = []
-
+    envs = get_envs(config.cli)
     test_indexes = [0] if config.whole_task else list(range(len(raw_task["test"])))
     for test_index in test_indexes:
         for ensemble_index in range(config.num_agents):
@@ -211,6 +227,7 @@ def _build_agent_specs(
                     log_dir=log_dir,
                     raw_task=raw_task,
                     model=config.model,
+                    envs=envs,
                     max_iterations=config.max_iterations,
                     soft_training_feedback=config.soft_training_feedback,
                     whole_task=config.whole_task,
@@ -222,28 +239,12 @@ def _build_agent_specs(
     return specs
 
 
-async def _run_backend_agent(spec: AgentRunSpec, context: OrchestrationContext) -> dict[str, Any]:
-    return await context.backend_impl.run_agent(
-        task_id=spec.task_id,
-        agent_id=spec.agent_id,
-        raw_task=spec.raw_task,
-        test_index=spec.test_index,
-        model=spec.model,
-        max_iterations=spec.max_iterations,
-        soft_training_feedback=spec.soft_training_feedback,
-        whole_task=spec.whole_task,
-        cli_type=spec.cli_type,
-        root_path=spec.root_path,
-        log_dir=spec.log_dir,
-    )
-
-
 async def _run_agent_with_empty_retry(spec: AgentRunSpec, context: OrchestrationContext) -> dict[str, Any]:
     result: dict[str, Any] | None = None
 
     for empty_attempt in range(MAX_EMPTY_RETRIES + 1):
         result = await _retry_backend_call(
-            lambda: _run_backend_agent(spec, context),
+            lambda: context.backend_impl.run_agent(spec),
             agent_id=spec.agent_id,
         )
         turns = int(result.get("turns", 0))
@@ -454,7 +455,7 @@ async def run_all(args: argparse.Namespace) -> None:
         cli_impl=get_cli_impl(args.cli),
     )
     try:
-        await context.backend_impl.setup(ROOT, args.cli)
+        context.backend_impl.setup(ROOT, args.cli)
     except DockerException as e:
         logger.error(f"Failed to setup {args.backend}: {e}")
         return

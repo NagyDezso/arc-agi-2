@@ -1,13 +1,13 @@
-import pytest
 import sys
-import numpy as np
 from pathlib import Path
 from unittest.mock import patch
+
+import numpy as np
 
 # Add src to sys path to resolve cli_impl import inside agent_runner
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from src.agent_runner import _format_diff, test_transform as _test_transform_func
+from src.agent_runner import _format_diff, test_transform
 
 
 def test_format_diff():
@@ -45,7 +45,7 @@ def transform(grid):
         {"input": [[5, 6]], "output": [[6, 7]]},
     ]
 
-    all_pass, msg, fn = _test_transform_func(transform_file, train_examples)
+    all_pass, msg, fn = test_transform(transform_file, train_examples)
     assert all_pass is True
     assert msg == "All training examples pass."
     assert fn is not None
@@ -64,7 +64,7 @@ def transform(grid):
 
     train_examples = [{"input": [[1, 2]], "output": [[2, 3]]}]
 
-    all_pass, msg, fn = _test_transform_func(transform_file, train_examples)
+    all_pass, msg, fn = test_transform(transform_file, train_examples)
     assert all_pass is False
     assert "Value mismatch" in msg
     assert fn is None

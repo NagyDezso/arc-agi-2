@@ -1,43 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Mapping
     from pathlib import Path
 
+    from src.backends.base import BackendRunner
     from src.cli_impl import CLIImpl
-
-
-class BackendRunner(Protocol):
-    """Protocol for execution backends (Docker, E2B) that run CLI agents.
-
-    Implementations must provide setup (one-time initialization) and run_agent
-    (async execution of a single agent on a task).
-    """
-
-    def setup(self, root_path: Path, cli_type: str) -> None:
-        """Initialize the backend. Called once before any agent runs."""
-        ...
-
-    async def run_agent(
-        self,
-        task_id: str,
-        agent_id: str,
-        raw_task: dict[str, Any],
-        test_index: int,
-        model: str,
-        max_iterations: int,
-        soft_training_feedback: bool,
-        whole_task: bool,
-        cli_type: str,
-        root_path: Path,
-        log_dir: Path,
-    ) -> dict[str, Any]:
-        """Run one agent on one test case. Returns a result dict with attempts, usage, cost, etc."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -82,6 +54,7 @@ class AgentRunSpec:
     log_dir: Path
     raw_task: dict[str, Any]
     model: str
+    envs: dict[str, Any]
     max_iterations: int
     soft_training_feedback: bool
     whole_task: bool

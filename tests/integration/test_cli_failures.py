@@ -1,8 +1,8 @@
-import pytest
 import tempfile
 from pathlib import Path
-from src.cli_impl.opencode import OpenCodeCLI
+
 from src.cli_impl.gemini import GeminiCLI
+from src.cli_impl.opencode import OpenCodeCLI
 
 
 def test_opencode_bad_model_failure():
@@ -20,7 +20,6 @@ def test_opencode_bad_model_failure():
             session_started=False,
             task_id="test_fail",
             test_index=0,
-            _status_cb=lambda e: None,
         )
 
         # We expect stderr to contain some kind of failure or raw_lines to be empty/error
@@ -58,7 +57,6 @@ def test_gemini_bad_model_failure():
             session_started=False,
             task_id="test_fail",
             test_index=0,
-            _status_cb=lambda e: None,
         )
 
         assert type(raw_lines) is list

@@ -1,6 +1,6 @@
-import pytest
 import tempfile
 from pathlib import Path
+
 from src.cli_impl.opencode import OpenCodeCLI
 
 
@@ -29,7 +29,6 @@ def test_opencode_real_tool_usage():
             session_started=False,
             task_id="test_int_1",
             test_index=0,
-            _status_cb=lambda e: None,
         )
 
         # Basic assertions that opencode ran

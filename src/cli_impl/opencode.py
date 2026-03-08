@@ -44,7 +44,6 @@ class OpenCodeCLI(CLIImpl):
         session_started: bool,
         task_id: str,
         test_index: int,
-        _status_cb: Any,
     ) -> tuple[list[str], int, str, dict, bool]:
 
         cmd = ["opencode", "run", "--format", "json"]

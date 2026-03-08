@@ -22,14 +22,7 @@ select = ["ALL"]
 ignore = [
     "COM812",  # missing-trailing-comma
     "CPY001",  # missing-copyright-notice
-    "D100",    # missing-docstring-in-public-module
-    "D102",    # undocumented-public-method
-    "D103",    # undocumented-public-function
-    "D104",    # undocumented-public-package
-    "D203",    # blank line required before class docstring
-    "D211",    # no-blank-line-before-class
-    "D213",    # multi-line-summary-second-line
-    "EM101",   # raw-string-in-exception
+    "D",       # All docstring errors
     "FIX002",  # line-contains-todo
     "ISC001",  # Conflicts with formatter ruff
     "PLR0904", # Too many public methods (... > 20)
@@ -49,6 +42,7 @@ ignore = [
     "ARG",     # Unused function args -> fixtures nevertheless are functionally relevant...
     "FBT",     # Don't care about booleans as positional arguments in tests, e.g. via @pytest.mark.parametrize()
     "PLR2004", # Magic value used in comparison, ...
+    "SLF001",  # private-member-access
     "ANN201",  # Missing type annotation for argument in function or method
 ]
 

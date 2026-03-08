@@ -1,27 +1,23 @@
-import pytest
-from src.backends.docker_runner import _handle_status_stdout_line
+import logging
+
+from src.backends.docker_runner import DockerRunner
 
 
-def test_handle_status_stdout_line(caplog):
-    import logging
+def test_handle_agent_stdout_line(caplog):
 
     caplog.set_level(logging.INFO)
 
-    # Test valid JSON event line
     line = '{"event": "started", "agent_id": "test_agent", "model": "test-model"}'
-    _handle_status_stdout_line(line)
+    DockerRunner()._handle_agent_stdout_line(line, "arc-agent-123")
 
-    assert any("started (model=test-model)" in record.message for record in caplog.records)
-    assert any("[status] test_agent" in record.message for record in caplog.records)
+    assert any("[agent:arc-agent-123]" in record.message for record in caplog.records)
+    assert any("started" in record.message for record in caplog.records)
 
 
-def test_handle_status_stdout_line_invalid_json(caplog):
+def test_handle_agent_stdout_line_plain_text(caplog):
+
+    caplog.set_level(logging.INFO)
+
     line = "Just some standard output not json"
-    _handle_status_stdout_line(line)
-    assert len(caplog.records) == 0
-
-
-def test_handle_status_stdout_line_unknown_event(caplog):
-    line = '{"event": "unknown_event", "agent_id": "test"}'
-    _handle_status_stdout_line(line)
-    assert len(caplog.records) == 0
+    DockerRunner()._handle_agent_stdout_line(line, "my-container")
+    assert any("[agent:my-container]" in record.message for record in caplog.records)

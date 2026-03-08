@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.models import AgentRunSpec
 from src.orchestrator import OrchestrationContext, process_task, run_all
 
 
@@ -32,7 +33,7 @@ class MockCLIImpl:
         session_started: bool,
         task_id: str,
         test_index: int,
-        _status_cb: Any,
+        status_cb: Any,
     ) -> tuple[list[str], int, str, dict, bool]:
         return ([], 0, "", {}, False)
 
@@ -49,22 +50,22 @@ class MockCLIImpl:
 class SequenceBackend:
     def __init__(self, results: list[Any]) -> None:
         self._results = list(results)
-        self.calls: list[dict[str, Any]] = []
+        self.calls: list[str] = []
         self.current_runs = 0
         self.max_concurrent_runs = 0
 
-    async def setup(self, root_path: Path, cli_type: str) -> None:
+    def setup(self, root_path: Path, cli_type: str) -> None:
         pass
 
-    async def run_agent(self, **kwargs: Any) -> dict[str, Any]:
-        self.calls.append(kwargs)
+    async def run_agent(self, spec: AgentRunSpec) -> dict[str, Any]:
+        self.calls.append(spec.agent_id)
         self.current_runs += 1
         self.max_concurrent_runs = max(self.max_concurrent_runs, self.current_runs)
         try:
             result = self._results.pop(0)
             if isinstance(result, BaseException):
                 raise result
-            log_dir = kwargs["log_dir"]
+            log_dir = spec.log_dir
             log_dir.mkdir(parents=True, exist_ok=True)
             if "raw_lines" in result and result["raw_lines"]:
                 (log_dir / "raw_stream.jsonl").write_text("\n".join(result["raw_lines"]) + "\n")
@@ -79,19 +80,19 @@ class QueueTrackingBackend:
         self.max_active = 0
         self.calls: list[str] = []
 
-    async def setup(self, root_path: Path, cli_type: str) -> None:
+    def setup(self, root_path: Path, cli_type: str) -> None:
         pass
 
-    async def run_agent(self, **kwargs: Any) -> dict[str, Any]:
-        self.calls.append(kwargs["agent_id"])
+    async def run_agent(self, spec: AgentRunSpec) -> dict[str, Any]:
+        self.calls.append(spec.agent_id)
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
             await __import__("asyncio").sleep(0.01)
-            test_index = kwargs["test_index"]
+            test_index = spec.test_index
             return {
-                "task_id": kwargs["task_id"],
-                "agent_id": kwargs["agent_id"],
+                "task_id": spec.task_id,
+                "agent_id": spec.agent_id,
                 "test_index": test_index,
                 "attempts": [{"test_index": test_index, "grid": [[test_index]]}],
                 "elapsed": 0.2,

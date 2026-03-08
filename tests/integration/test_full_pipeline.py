@@ -1,19 +1,25 @@
 import argparse
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from src.backends.base import BackendRunner
 from src.cli_impl.base import CLIImpl
+from src.models import AgentRunSpec
 from src.orchestrator import OrchestrationContext, process_task
 
 
-class MockBackend:
-    async def run_agent(self, **kwargs):
+class MockBackend(BackendRunner):
+    def setup(self, root_path: Path, cli_type: str) -> None:
+        pass
+
+    async def run_agent(self, spec: AgentRunSpec):
         # Simulate a successful run
-        log_dir = kwargs.get("log_dir")
+        log_dir = spec.log_dir
         if log_dir:
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / "raw_stream.jsonl").write_text('{"event": "started"}')
@@ -49,7 +55,7 @@ class MockCLIImpl(CLIImpl):
         session_started: bool,
         task_id: str,
         test_index: int,
-        _status_cb: Any,
+        status_cb: Callable[[str, Any], None],
     ) -> tuple[list[str], int, str, dict, bool]:
         return ([], 0, "", {}, False)
 
@@ -83,7 +89,7 @@ async def test_process_task_integration(tmp_path, mock_raw_task_file):
 
     # Mock load_task_json to return our fixture
     with patch("src.orchestrator.load_task_json") as mock_load:
-        with open(mock_raw_task_file) as f:
+        with mock_raw_task_file.open() as f:
             mock_load.return_value = json.load(f)
 
         result = await process_task(

@@ -20,6 +20,7 @@ import numpy as np
 
 from cli_impl import CLIImpl
 
+logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout, force=True)
 logger = logging.getLogger(__name__)
 
 INSTRUCTION = """\
@@ -33,13 +34,6 @@ Test against ALL training pairs. Iterate until correct.
 When analyzing, consider: object manipulation, color changes, spatial patterns,
 object relationships, grid structure (borders, separators, subgrids).
 """
-
-
-def emit_status(event: dict) -> None:
-    try:
-        print(json.dumps(event), flush=True)
-    except Exception:
-        pass
 
 
 TRANSFORM_TIMEOUT = 120
@@ -174,6 +168,10 @@ def prepare_workspace(
     return ws
 
 
+def log_agent_status(message: str) -> None:
+    logger.info("[agent] %s", message)
+
+
 def run_agent(config: dict) -> dict:
     task_id: str = config["task_id"]
     agent_id: str = config["agent_id"]
@@ -200,27 +198,18 @@ def run_agent(config: dict) -> dict:
     stderr_text = ""
     all_raw_lines = []
 
-    def _status(event: dict) -> None:
-        emit_status({"agent_id": agent_id, "task_id": task_id, **event})
-
     try:
         import re
 
         ens_match = re.search(r"_ens(\d+)", agent_id)
         seed = int(ens_match.group(1)) if ens_match else 0
         ws = prepare_workspace(agent_id, raw_task, test_index, impl, seed=seed, whole_task=whole_task)
-        _status({"event": "started", "model": model})
+        log_agent_status(f"{agent_id} started model={model}")
         feedback = ""
         iteration = 0
         session_started = False
         while iteration < max_iterations:
-            _status(
-                {
-                    "event": "iteration",
-                    "iteration": iteration + 1,
-                    "max_iterations": max_iterations,
-                }
-            )
+            log_agent_status(f"{agent_id} iteration {iteration + 1}/{max_iterations}")
 
             raw_lines, turns, stderr, stats, session_started = impl.run_session(
                 ws_path=ws,
@@ -231,7 +220,6 @@ def run_agent(config: dict) -> dict:
                 session_started=session_started,
                 task_id=task_id,
                 test_index=test_index,
-                _status_cb=_status,
             )
 
             all_raw_lines.extend(raw_lines)
@@ -240,7 +228,7 @@ def run_agent(config: dict) -> dict:
             total_cached_tokens += stats["cached_tokens"]
             total_output_tokens += stats["output_tokens"]
             if stderr:
-                _status({"event": "error", "msg": stderr})
+                log_agent_status(f"{agent_id} error {stderr.strip()}")
                 stderr_text += stderr + "\n"
                 # Check for fatal errors that should stop the agent
                 fatal_errors = [
@@ -263,13 +251,7 @@ def run_agent(config: dict) -> dict:
                 )
             else:
                 all_pass, feedback_text, fn = test_transform(transform_path, raw_task["train"])
-                _status(
-                    {
-                        "event": "transform_validation",
-                        "iteration": iteration + 1,
-                        "all_pass": all_pass,
-                    }
-                )
+                log_agent_status(f"{agent_id} validation iteration={iteration + 1} all_pass={all_pass}")
 
                 if not all_pass:
                     feedback = (
@@ -300,7 +282,7 @@ def run_agent(config: dict) -> dict:
                                         "timestamp": time.time(),
                                     }
                                 )
-                            _status({"event": "submitted", "attempt": attempts_used})
+                            log_agent_status(f"{agent_id} submitted attempt={attempts_used}")
                             break
                     else:
                         test_input = raw_task["test"][test_index]["input"]
@@ -319,7 +301,7 @@ def run_agent(config: dict) -> dict:
                                     "timestamp": time.time(),
                                 }
                             )
-                            _status({"event": "submitted", "attempt": attempts_used})
+                            log_agent_status(f"{agent_id} submitted attempt={attempts_used}")
                             break
 
             iteration += 1
@@ -338,13 +320,7 @@ def run_agent(config: dict) -> dict:
                 )
 
         elapsed = time.time() - start
-        _status(
-            {
-                "event": "done",
-                "elapsed": round(elapsed, 1),
-                "attempts": attempts_used,
-            }
-        )
+        log_agent_status(f"{agent_id} done elapsed={round(elapsed, 1)}s attempts={attempts_used}")
         cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
         return {
             "task_id": task_id,
@@ -388,13 +364,13 @@ def run_agent(config: dict) -> dict:
 def main():
     config_path = Path("/root/config.json")
     if not config_path.exists():
-        emit_status({"event": "error", "msg": "No /root/config.json found"})
+        log_agent_status("startup error: missing /root/config.json")
         sys.exit(1)
 
     # OpenCode auth initialization
     auth_path = Path("/root/.local/share/opencode")
     auth_path.mkdir(parents=True, exist_ok=True)
-    with open(auth_path / "auth.json", "w") as f:
+    with (auth_path / "auth.json").open("w") as f:
         json.dump(
             {
                 "github-copilot": {
@@ -435,7 +411,7 @@ def main():
     result = run_agent(config)
     results_path = Path("/workspace/results.json")
     results_path.write_text(json.dumps(result))
-    emit_status({"event": "results_written", "path": str(results_path)})
+    log_agent_status(f"results written path={results_path}")
 
 
 if __name__ == "__main__":

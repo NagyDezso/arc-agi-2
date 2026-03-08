@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -22,7 +23,7 @@ class CLIImpl(Protocol):
         session_started: bool,
         task_id: str,
         test_index: int,
-        _status_cb: Any,
+        status_cb: Callable[[str, Any], None],
     ) -> tuple[list[str], int, str, dict, bool]:
         """Runs a CLI session and returns (raw_lines, turns, stderr, stats, session_started)."""
         ...

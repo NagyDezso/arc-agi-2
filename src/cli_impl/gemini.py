@@ -1,3 +1,4 @@
+import contextlib
 import json
 import queue
 import re
@@ -96,7 +97,6 @@ class GeminiCLI(CLIImpl):
         session_started: bool,
         task_id: str,
         test_index: int,
-        _status_cb: Any,
     ) -> tuple[list[str], int, str, dict, bool]:
         cmd = ["gemini", "-y", "-m", model, "-o", "stream-json"]
         if iteration == 0:
@@ -192,10 +192,8 @@ class GeminiCLI(CLIImpl):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-            try:
+            with contextlib.suppress(OSError):
                 stderr_text = proc.stderr.read()
-            except Exception:
-                pass
 
         reader_thread.join(timeout=5)
 

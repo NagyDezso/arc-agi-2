@@ -1,6 +1,6 @@
-import pytest
 import tempfile
 from pathlib import Path
+
 from src.cli_impl.gemini import GeminiCLI
 
 
@@ -29,7 +29,6 @@ def test_gemini_real_tool_usage():
             session_started=False,
             task_id="test_gemini_int",
             test_index=0,
-            _status_cb=lambda e: None,
         )
         # Pytest logging of session output
         print("\n[Gemini Session Output]")

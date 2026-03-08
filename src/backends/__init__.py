@@ -1,13 +1,18 @@
 """Backend runners for docker and e2b."""
 
+from src.backends.base import BackendRunner
 
-def get_backend_runner(backend_name: str):
+__all__ = ["BackendRunner", "get_backend_runner"]
+
+
+def get_backend_runner(backend_name: str) -> BackendRunner:
+    """Return a BackendRunner instance for the given backend name."""
     if backend_name == "docker":
-        import src.backends.docker_runner as runner
+        from src.backends.docker_runner import DockerRunner
 
-        return runner
+        return DockerRunner()
     if backend_name == "e2b":
-        import src.backends.e2b_runner as runner
+        from src.backends.e2b_runner import E2BRunner
 
-        return runner
+        return E2BRunner()
     raise ValueError(f"Unknown backend name: {backend_name}")
