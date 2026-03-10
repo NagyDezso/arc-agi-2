@@ -3,7 +3,7 @@
 The orchestrator runs locally and handles:
 - Task loading from ARC-AGI data files
 - Dispatching agents to backends
-- Writing logs (raw_stream, transcript, readable, attempts)
+- Writing logs (session, transcript, readable, attempts)
 - Results aggregation and summary.json
 - Resume logic (skip completed tasks)
 """
@@ -24,6 +24,7 @@ from docker.errors import DockerException
 from src.backends import get_backend_runner
 from src.cli_impl import CLIImpl, get_cli_impl
 from src.logger import setup_logging
+from src.log_protocol import SESSION_LOG_FILENAME, TRANSCRIPT_FILENAME
 from src.models import (
     AgentResultData,
     AgentRunSpec,
@@ -57,7 +58,7 @@ def _load_all_tasks() -> dict[str, dict[str, Any]]:
         if not CHALLENGES_FILE.exists():
             message = f"Challenges file not found: {CHALLENGES_FILE}"
             raise FileNotFoundError(message)
-        _ALL_TASKS.update(json.loads(CHALLENGES_FILE.read_text()))
+        _ALL_TASKS.update(json.loads(CHALLENGES_FILE.read_text(encoding="utf-8")))
     return _ALL_TASKS
 
 
@@ -75,20 +76,33 @@ def load_task_json(task_id: str) -> dict[str, Any]:
     return all_tasks[task_id]
 
 
-def write_agent_logs(result: dict[str, Any], task_id: str, log_dir: Path, cli_impl: CLIImpl) -> None:
+def write_agent_logs(
+    result: dict[str, Any],
+    task_id: str,
+    log_dir: Path,
+    cli_impl: CLIImpl,
+    model: str | None = None,
+) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     raw_lines: list[str] = result.get("raw_lines", [])
 
-    raw_stream_path = log_dir / "raw_stream.jsonl"
-    if not raw_stream_path.exists() and raw_lines:
-        raw_stream_path.write_text("".join(f"{line}\n" for line in raw_lines))
+    session_log_path = log_dir / SESSION_LOG_FILENAME
+    if not session_log_path.exists():
+        legacy_raw_stream = log_dir / "raw_stream.jsonl"
+        if legacy_raw_stream.exists():
+            legacy_raw_stream.replace(session_log_path)
 
-    transcript_entries = cli_impl.parse_stream_json(raw_lines, task_id)
-    transcript_path = log_dir / "transcript.jsonl"
-    transcript_path.write_text("".join(f"{json.dumps(entry)}\n" for entry in transcript_entries))
+    transcript_path = log_dir / TRANSCRIPT_FILENAME
+    if not transcript_path.exists():
+        transcript_entries = cli_impl.parse_stream_json(raw_lines, task_id, model=model)
+        transcript_path.write_text(
+            "".join(f"{json.dumps(entry)}\n" for entry in transcript_entries),
+            encoding="utf-8",
+            errors="replace",
+        )
 
     readable_path = log_dir / "readable.md"
-    with readable_path.open("w") as readable_file:
+    with readable_path.open("w", encoding="utf-8", errors="replace") as readable_file:
         agent_id = result.get("agent_id", "unknown")
         test_index = result.get("test_index", 0)
         readable_file.write(f"# Agent Log: {agent_id} (task: {task_id}, test: {test_index})\n\n")
@@ -101,13 +115,21 @@ def write_agent_logs(result: dict[str, Any], task_id: str, log_dir: Path, cli_im
             cli_impl.write_readable_log(readable_file, line, obj)
 
     attempts_path = log_dir / "attempts.jsonl"
-    attempts_path.write_text("".join(f"{json.dumps(attempt)}\n" for attempt in result.get("attempts", [])))
+    attempts_path.write_text(
+        "".join(f"{json.dumps(attempt)}\n" for attempt in result.get("attempts", [])),
+        encoding="utf-8",
+        errors="replace",
+    )
 
     stderr = result.get("stderr", "")
     if stderr:
-        (log_dir / "stderr.log").write_text(stderr)
+        (log_dir / "stderr.log").write_text(stderr, encoding="utf-8", errors="replace")
     if "error" in result:
-        (log_dir / "error.log").write_text(result["error"])
+        (log_dir / "error.log").write_text(
+            result["error"],
+            encoding="utf-8",
+            errors="replace",
+        )
 
 
 async def _retry_backend_call(
@@ -165,14 +187,14 @@ def _write_agent_result(
 
     if task_file.exists():
         try:
-            data = json.loads(task_file.read_text())
+            data = json.loads(task_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             data = {"agents": {}}
     else:
         data = {"agents": {}}
 
     data.setdefault("agents", {})[agent_id] = agent_data
-    tmp_file.write_text(json.dumps(data, indent=2))
+    tmp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp_file.replace(task_file)
 
 
@@ -287,7 +309,7 @@ async def _run_agent_spec(
         finally:
             backend_queue.put_nowait(token)
 
-    write_agent_logs(raw_result, spec.task_id, spec.log_dir, context.cli_impl)
+    write_agent_logs(raw_result, spec.task_id, spec.log_dir, context.cli_impl, model=spec.model)
 
     agent_result = AgentResultData.from_backend_result(raw_result, spec.test_index)
     _write_agent_result(
@@ -322,7 +344,11 @@ def _collect_task_result(
             error_result = AgentResultData.from_exception(spec.agent_id, spec.test_index, raw_result)
             per_agent[spec.agent_id] = error_result.to_persisted_agent_dict()
             spec.log_dir.mkdir(parents=True, exist_ok=True)
-            (spec.log_dir / "error.log").write_text(str(raw_result))
+            (spec.log_dir / "error.log").write_text(
+                str(raw_result),
+                encoding="utf-8",
+                errors="replace",
+            )
             continue
 
         valid_results.append(raw_result)
@@ -367,7 +393,10 @@ async def process_task(
     task_result, process_result = _collect_task_result(task_id, num_tests, specs, agent_results)
     task_results_dir = run_dir / "task_results"
     task_results_dir.mkdir(exist_ok=True)
-    (task_results_dir / f"{task_id}.json").write_text(json.dumps(task_result, indent=2))
+    (task_results_dir / f"{task_id}.json").write_text(
+        json.dumps(task_result),
+        encoding="utf-8",
+    )
     return process_result.to_dict()
 
 
@@ -403,7 +432,7 @@ def _load_completed_tasks(run_dir: Path) -> dict[str, dict[str, Any]]:
 
     for result_file in task_results_dir.glob("*.json"):
         try:
-            completed_tasks[result_file.stem] = json.loads(result_file.read_text())
+            completed_tasks[result_file.stem] = json.loads(result_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             logger.exception(f"Failed to load completed task results from {result_file}")
 
@@ -477,7 +506,9 @@ async def run_all(args: argparse.Namespace) -> None:
         logger.info(f"Found {len(completed_tasks)} already-completed tasks, skipping them")
 
     remaining_ids = _select_remaining_task_ids(task_ids, completed_tasks, getattr(args, "limit", None))
-    logger.info(f"Running {len(remaining_ids)} tasks ({len(task_ids) - len(remaining_ids)} skipped)")
+    logger.info(
+        f"Running {len(remaining_ids)} tasks ({len(task_ids) - len(completed_tasks) - len(remaining_ids)} skipped)"
+    )
 
     all_scores, total_submitted, total_tests, total_cost = _accumulate_existing_scores(completed_tasks)
     completed = len(completed_tasks)
@@ -521,7 +552,7 @@ async def run_all(args: argparse.Namespace) -> None:
         "total_cost": round(total_cost, 2),
         "tasks": dict(all_scores),
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, encoding="utf-8"))
     logger.info(
         f"\n{'=' * 60}\nDone! {len(task_ids)} tasks, {total_tests} test inputs\nSummary: {run_dir / 'summary.json'}"
     )

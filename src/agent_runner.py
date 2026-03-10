@@ -6,11 +6,10 @@ Self-contained script that runs CLI sessions to solve an ARC task.
 
 import importlib.util
 import json
-import logging
 import multiprocessing
 import os
 import random
-import sys
+import re
 import time
 import traceback
 from collections.abc import Callable
@@ -18,10 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
-from cli_impl import CLIImpl
-
-logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout, force=True)
-logger = logging.getLogger(__name__)
+from cli_impl import CLIImpl, get_cli_impl
+from log_protocol import encode_status_event, encode_transcript_event
 
 INSTRUCTION = """\
 Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
@@ -92,7 +89,7 @@ def _format_diff(expected: np.ndarray, actual: np.ndarray) -> str:
     return "\n".join(lines)
 
 
-def test_transform(transform_path: Path, train_examples: list[dict]) -> tuple[bool, str, Callable | None]:
+def run_transform(transform_path: Path, train_examples: list[dict]) -> tuple[bool, str, Callable | None]:
     try:
         spec = importlib.util.spec_from_file_location("transform", str(transform_path))
         if spec is None or spec.loader is None:
@@ -138,7 +135,6 @@ def test_transform(transform_path: Path, train_examples: list[dict]) -> tuple[bo
 
 
 def prepare_workspace(
-    agent_id: str,
     raw_task: dict,
     test_index: int,
     cli_impl: CLIImpl,
@@ -163,209 +159,6 @@ def prepare_workspace(
             "test": [{"input": raw_task["test"][test_index]["input"]}],
         }
     (ws / "task.json").write_text(json.dumps(public_task, indent=2))
-
-    cli_impl.workspace_extras(ws)
-    return ws
-
-
-def log_agent_status(message: str) -> None:
-    logger.info("[agent] %s", message)
-
-
-def run_agent(config: dict) -> dict:
-    task_id: str = config["task_id"]
-    agent_id: str = config["agent_id"]
-    raw_task: dict = config["raw_task"]
-    test_index: int = config["test_index"]
-    model: str = config["model"]
-    max_iterations: int = config.get("max_iterations", 10)
-    soft_training_feedback: bool = config.get("soft_training_feedback", False)
-    whole_task: bool = config.get("whole_task", False)
-    cli_type: str = config.get("cli_type", "gemini")
-
-    import cli_impl
-
-    impl = cli_impl.get_cli_impl(cli_type)
-
-    start = time.time()
-    attempts, attempts_used = [], 0
-    total_turns, total_input_tokens, total_cached_tokens, total_output_tokens = (
-        0,
-        0,
-        0,
-        0,
-    )
-    stderr_text = ""
-    all_raw_lines = []
-
-    try:
-        import re
-
-        ens_match = re.search(r"_ens(\d+)", agent_id)
-        seed = int(ens_match.group(1)) if ens_match else 0
-        ws = prepare_workspace(agent_id, raw_task, test_index, impl, seed=seed, whole_task=whole_task)
-        log_agent_status(f"{agent_id} started model={model}")
-        feedback = ""
-        iteration = 0
-        session_started = False
-        while iteration < max_iterations:
-            log_agent_status(f"{agent_id} iteration {iteration + 1}/{max_iterations}")
-
-            raw_lines, turns, stderr, stats, session_started = impl.run_session(
-                ws_path=ws,
-                model=model,
-                initial_prompt=INSTRUCTION,
-                feedback=feedback,
-                iteration=iteration,
-                session_started=session_started,
-                task_id=task_id,
-                test_index=test_index,
-            )
-
-            all_raw_lines.extend(raw_lines)
-            total_turns += turns
-            total_input_tokens += stats["input_tokens"]
-            total_cached_tokens += stats["cached_tokens"]
-            total_output_tokens += stats["output_tokens"]
-            if stderr:
-                log_agent_status(f"{agent_id} error {stderr.strip()}")
-                stderr_text += stderr + "\n"
-                # Check for fatal errors that should stop the agent
-                fatal_errors = [
-                    "ModelNotFoundError",
-                    "Invalid model",
-                    "Requested entity was not found",
-                    "The model is not supported",
-                    "Access denied",
-                    "API key not valid",
-                    "QuotaExceeded",
-                ]
-                if any(err in stderr for err in fatal_errors):
-                    break
-
-            transform_path = ws / "transform.py"
-            if not transform_path.exists():
-                feedback = (
-                    "You haven't written transform.py yet. Write a file called "
-                    "transform.py with a function transform(grid: np.ndarray) -> np.ndarray."
-                )
-            else:
-                all_pass, feedback_text, fn = test_transform(transform_path, raw_task["train"])
-                log_agent_status(f"{agent_id} validation iteration={iteration + 1} all_pass={all_pass}")
-
-                if not all_pass:
-                    feedback = (
-                        "Your transform function doesn't pass the training examples. Try again."
-                        if soft_training_feedback
-                        else feedback_text
-                    )
-                elif fn is not None:
-                    if whole_task:
-                        all_ok = True
-                        pending_grids = []
-                        for ti, test_case in enumerate(raw_task["test"]):
-                            try:
-                                test_arr = np.array(test_case["input"], dtype=int)
-                                grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
-                            except Exception as e:
-                                feedback = f"Transform passed training but failed on test input {ti}: {e}"
-                                all_ok = False
-                                break
-                            pending_grids.append({"test_index": ti, "grid": grid})
-                        if all_ok:
-                            for p in pending_grids:
-                                attempts_used += 1
-                                attempts.append(
-                                    {
-                                        **p,
-                                        "attempt": attempts_used,
-                                        "timestamp": time.time(),
-                                    }
-                                )
-                            log_agent_status(f"{agent_id} submitted attempt={attempts_used}")
-                            break
-                    else:
-                        test_input = raw_task["test"][test_index]["input"]
-                        try:
-                            test_arr = np.array(test_input, dtype=int)
-                            grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
-                        except Exception as e:
-                            feedback = f"Transform passed training but failed on test input: {e}"
-                        else:
-                            attempts_used += 1
-                            attempts.append(
-                                {
-                                    "test_index": test_index,
-                                    "attempt": attempts_used,
-                                    "grid": grid,
-                                    "timestamp": time.time(),
-                                }
-                            )
-                            log_agent_status(f"{agent_id} submitted attempt={attempts_used}")
-                            break
-
-            iteration += 1
-
-        if not attempts and not whole_task:
-            extracted = impl.extract_grid_from_output(all_raw_lines)
-            if extracted is not None:
-                attempts_used += 1
-                attempts.append(
-                    {
-                        "test_index": test_index,
-                        "attempt": attempts_used,
-                        "grid": extracted,
-                        "timestamp": time.time(),
-                    }
-                )
-
-        elapsed = time.time() - start
-        log_agent_status(f"{agent_id} done elapsed={round(elapsed, 1)}s attempts={attempts_used}")
-        cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
-        return {
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "test_index": test_index,
-            "attempts": attempts,
-            "elapsed": round(elapsed, 1),
-            "cost": cost,
-            "turns": total_turns,
-            "usage": {
-                "input_tokens": total_input_tokens,
-                "cached_tokens": total_cached_tokens,
-                "output_tokens": total_output_tokens,
-            },
-            "timed_out": False,
-            "raw_lines": all_raw_lines,
-            "stderr": stderr_text,
-        }
-
-    except Exception as e:
-        elapsed = time.time() - start
-        cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
-        return {
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "test_index": test_index,
-            "attempts": attempts,
-            "elapsed": round(elapsed, 1),
-            "cost": cost,
-            "turns": total_turns,
-            "usage": {
-                "input_tokens": total_input_tokens,
-                "cached_tokens": total_cached_tokens,
-                "output_tokens": total_output_tokens,
-            },
-            "error": str(e),
-            "raw_lines": all_raw_lines,
-        }
-
-
-def main():
-    config_path = Path("/root/config.json")
-    if not config_path.exists():
-        log_agent_status("startup error: missing /root/config.json")
-        sys.exit(1)
 
     # OpenCode auth initialization
     auth_path = Path("/root/.local/share/opencode")
@@ -405,13 +198,223 @@ def main():
             json.dumps({"security": {"auth": {"selectedType": "oauth-personal"}}})
         )
 
+    cli_impl.workspace_extras(ws)
+    return ws
+
+
+def _emit_status(agent_id: str, message: str, *, level: str = "info") -> None:
+    print(encode_status_event(f"[{agent_id}] {message}", level=level), flush=True)
+
+
+def _emit_transcript_entries(entries: list[dict]) -> None:
+    for entry in entries:
+        print(encode_transcript_event(entry), flush=True)
+
+
+def run_agent(config: dict) -> dict:
+    task_id: str = config["task_id"]
+    agent_id: str = config["agent_id"]
+    raw_task: dict = config["raw_task"]
+    test_index: int = config["test_index"]
+    model: str = config["model"]
+    max_iterations: int = config.get("max_iterations", 10)
+    soft_training_feedback: bool = config.get("soft_training_feedback", False)
+    whole_task: bool = config.get("whole_task", False)
+    cli_type: str = config.get("cli_type", "gemini")
+    impl = get_cli_impl(cli_type)
+
+    start = time.time()
+    attempts, attempts_used = [], 0
+    total_turns, total_input_tokens, total_cached_tokens, total_output_tokens = (
+        0,
+        0,
+        0,
+        0,
+    )
+    stderr_text = ""
+    all_raw_lines = []
+
+    try:
+        ens_match = re.search(r"_ens(\d+)", agent_id)
+        seed = int(ens_match.group(1)) if ens_match else 0
+        ws = prepare_workspace(raw_task, test_index, impl, seed=seed, whole_task=whole_task)
+        transcript_stream = impl.build_transcript_stream(task_id, model=model)
+        _emit_status(agent_id, f"started model={model}")
+        feedback = ""
+        iteration = 0
+        session_started = False
+        while iteration < max_iterations:
+            _emit_status(agent_id, f"iteration {iteration + 1}/{max_iterations}")
+
+            def on_raw_line(raw_line: str) -> None:
+                _emit_transcript_entries(transcript_stream.consume_raw_line(raw_line))
+
+            raw_lines, turns, stderr, stats, session_started = impl.run_session(
+                ws_path=ws,
+                model=model,
+                initial_prompt=INSTRUCTION,
+                feedback=feedback,
+                iteration=iteration,
+                session_started=session_started,
+                task_id=task_id,
+                test_index=test_index,
+                raw_line_cb=on_raw_line,
+            )
+
+            all_raw_lines.extend(raw_lines)
+            total_turns += turns
+            total_input_tokens += stats["input_tokens"]
+            total_cached_tokens += stats["cached_tokens"]
+            total_output_tokens += stats["output_tokens"]
+            if stderr:
+                _emit_status(agent_id, f"error {stderr.strip()}", level="error")
+                stderr_text += stderr + "\n"
+                # Check for fatal errors that should stop the agent
+                fatal_errors = [
+                    "ModelNotFoundError",
+                    "Invalid model",
+                    "Requested entity was not found",
+                    "The model is not supported",
+                    "Access denied",
+                    "API key not valid",
+                    "QuotaExceeded",
+                ]
+                if any(err in stderr for err in fatal_errors):
+                    break
+
+            transform_path = ws / "transform.py"
+            if not transform_path.exists():
+                feedback = (
+                    "You haven't written transform.py yet. Write a file called "
+                    "transform.py with a function transform(grid: np.ndarray) -> np.ndarray."
+                )
+            else:
+                all_pass, feedback_text, fn = run_transform(transform_path, raw_task["train"])
+                _emit_status(agent_id, f"validation iteration={iteration + 1} all_pass={all_pass}")
+
+                if not all_pass:
+                    feedback = (
+                        "Your transform function doesn't pass the training examples. Try again."
+                        if soft_training_feedback
+                        else feedback_text
+                    )
+                elif fn is not None:
+                    if whole_task:
+                        all_ok = True
+                        pending_grids = []
+                        for ti, test_case in enumerate(raw_task["test"]):
+                            try:
+                                test_arr = np.array(test_case["input"], dtype=int)
+                                grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
+                            except Exception as e:
+                                feedback = f"Transform passed training but failed on test input {ti}: {e}"
+                                all_ok = False
+                                break
+                            pending_grids.append({"test_index": ti, "grid": grid})
+                        if all_ok:
+                            for p in pending_grids:
+                                attempts_used += 1
+                                attempts.append(
+                                    {
+                                        **p,
+                                        "attempt": attempts_used,
+                                        "timestamp": time.time(),
+                                    }
+                                )
+                            _emit_status(agent_id, f"submitted attempt={attempts_used}")
+                            break
+                    else:
+                        test_input = raw_task["test"][test_index]["input"]
+                        try:
+                            test_arr = np.array(test_input, dtype=int)
+                            grid = run_with_timeout(fn, test_arr.copy()).astype(int).tolist()
+                        except Exception as e:
+                            feedback = f"Transform passed training but failed on test input: {e}"
+                        else:
+                            attempts_used += 1
+                            attempts.append(
+                                {
+                                    "test_index": test_index,
+                                    "attempt": attempts_used,
+                                    "grid": grid,
+                                    "timestamp": time.time(),
+                                }
+                            )
+                            _emit_status(agent_id, f"submitted attempt={attempts_used}")
+                            break
+
+            iteration += 1
+
+        if not attempts and not whole_task:
+            extracted = impl.extract_grid_from_output(all_raw_lines)
+            if extracted is not None:
+                attempts_used += 1
+                attempts.append(
+                    {
+                        "test_index": test_index,
+                        "attempt": attempts_used,
+                        "grid": extracted,
+                        "timestamp": time.time(),
+                    }
+                )
+
+        elapsed = time.time() - start
+        _emit_transcript_entries(transcript_stream.finalize())
+        _emit_status(agent_id, f"done elapsed={round(elapsed, 1)}s attempts={attempts_used}")
+        cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
+        return {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "test_index": test_index,
+            "attempts": attempts,
+            "elapsed": round(elapsed, 1),
+            "cost": cost,
+            "turns": total_turns,
+            "usage": {
+                "input_tokens": total_input_tokens,
+                "cached_tokens": total_cached_tokens,
+                "output_tokens": total_output_tokens,
+            },
+            "timed_out": False,
+            "raw_lines": all_raw_lines,
+            "stderr": stderr_text,
+        }
+
+    except Exception as e:
+        elapsed = time.time() - start
+        if "transcript_stream" in locals():
+            _emit_transcript_entries(transcript_stream.finalize())
+        cost = impl.calculate_cost(model, total_input_tokens, total_cached_tokens, total_output_tokens)
+        return {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "test_index": test_index,
+            "attempts": attempts,
+            "elapsed": round(elapsed, 1),
+            "cost": cost,
+            "turns": total_turns,
+            "usage": {
+                "input_tokens": total_input_tokens,
+                "cached_tokens": total_cached_tokens,
+                "output_tokens": total_output_tokens,
+            },
+            "error": str(e),
+            "raw_lines": all_raw_lines,
+        }
+
+
+def main() -> None:
+    config_path = Path("/root/config.json")
+    if not config_path.exists():
+        _emit_status("None", "startup error: missing /root/config.json", level="error")
+        return
+
     config = json.loads(config_path.read_text())
     config_path.unlink()
-
     result = run_agent(config)
     results_path = Path("/workspace/results.json")
     results_path.write_text(json.dumps(result))
-    log_agent_status(f"results written path={results_path}")
+    _emit_status(config["agent_id"], f"results written path={results_path}")
 
 
 if __name__ == "__main__":

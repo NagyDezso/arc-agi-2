@@ -7,6 +7,7 @@ from pathlib import Path
 from e2b import ALL_TRAFFIC, AsyncSandbox, Stdout, Stderr, SandboxNetworkOpts
 
 from src.backends.base import BackendRunner
+from src.log_protocol import SESSION_LOG_FILENAME, TRANSCRIPT_FILENAME, decode_stream_event
 from src.models import AgentRunSpec
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,34 @@ E2B_COST_PER_VCPU_HOUR = 0.05
 class E2BRunner(BackendRunner):
     def setup(self, root_path: Path, cli_type: str) -> None:
         pass
+
+    def _route_agent_output_line(self, line: str, session_file, transcript_file) -> None:
+        event = decode_stream_event(line)
+        if event is None:
+            logger.info(line)
+            session_file.write(line + "\n")
+            session_file.flush()
+            return
+
+        if event["type"] == "status":
+            message = str(event.get("message", ""))
+            level = str(event.get("level", "info")).lower()
+            if message:
+                for part in message.splitlines() or [""]:
+                    if level == "error":
+                        logger.error(part)
+                    elif level == "warning":
+                        logger.warning(part)
+                    else:
+                        logger.info(part)
+                session_file.write(message + "\n")
+                session_file.flush()
+            return
+
+        entry = event.get("entry")
+        if isinstance(entry, dict):
+            transcript_file.write(json.dumps(entry) + "\n")
+            transcript_file.flush()
 
     async def run_agent(
         self,
@@ -46,7 +75,8 @@ class E2BRunner(BackendRunner):
         }
 
         spec.log_dir.mkdir(parents=True, exist_ok=True)
-        raw_stream_path = spec.log_dir / "raw_stream.jsonl"
+        session_log_path = spec.log_dir / SESSION_LOG_FILENAME
+        transcript_path = spec.log_dir / TRANSCRIPT_FILENAME
 
         sandbox = None
         sandbox_start = time.time()
@@ -77,21 +107,28 @@ class E2BRunner(BackendRunner):
         try:
             await sandbox.files.write("/root/config.json", json.dumps(config))
             await sandbox.files.write("/app/agent_runner.py", (spec.root_path / "agent_runner.py").read_text())
+            await sandbox.files.write("/app/log_protocol.py", (spec.root_path / "log_protocol.py").read_text())
             await sandbox.files.make_dir("/app/cli_impl")
             for f in (spec.root_path / "cli_impl").glob("*.py"):
                 await sandbox.files.write(f"/app/cli_impl/{f.name}", f.read_text())
 
-            raw_f = raw_stream_path.open("a")
+            session_f = session_log_path.open("a")
+            transcript_f = transcript_path.open("a")
+            stdout_buffer = ""
 
             def on_stdout(output: Stdout) -> None:
-                if output.strip():
-                    logger.info(f"[agent] {spec.agent_id}: {output}")
-                    raw_f.write(output + "\n")
-                    raw_f.flush()
+                nonlocal stdout_buffer
+                stdout_buffer += str(output)
+                while "\n" in stdout_buffer:
+                    line, stdout_buffer = stdout_buffer.split("\n", 1)
+                    line = line.rstrip("\r")
+                    if not line:
+                        continue
+                    self._route_agent_output_line(line, session_f, transcript_f)
 
             def on_stderr(output: Stderr) -> None:
                 if output.strip():
-                    logger.error(f"  [e2b-stderr] {spec.agent_id}: {output[:200]}")
+                    logger.error(output[:200])
 
             try:
                 await sandbox.commands.run(
@@ -102,7 +139,10 @@ class E2BRunner(BackendRunner):
                     on_stderr=on_stderr,
                 )
             finally:
-                raw_f.close()
+                if stdout_buffer.strip():
+                    self._route_agent_output_line(stdout_buffer.rstrip("\r"), session_f, transcript_f)
+                session_f.close()
+                transcript_f.close()
 
             results_content = await sandbox.files.read("/workspace/results.json")
             result = json.loads(results_content)
@@ -114,7 +154,7 @@ class E2BRunner(BackendRunner):
             result["total_cost"] = result.get("cost", 0) + e2b_cost
 
             logger.info(
-                f"  [e2b-cost] {spec.agent_id}: API=${result.get('cost', 0):.4f}, "
+                f"[e2b-cost] API=${result.get('cost', 0):.4f}, "
                 f"E2B=${e2b_cost:.4f}, Total=${result['total_cost']:.4f}, "
                 f"Duration={sandbox_duration:.1f}s"
             )
@@ -122,7 +162,7 @@ class E2BRunner(BackendRunner):
 
         except Exception as e:
             err_msg = f"E2B sandbox error: {e}"
-            logger.error(f"  [e2b-error] {spec.agent_id}: {err_msg}", exc_info=True)
+            logger.error(f"[e2b-error] {err_msg}", exc_info=True)
             sandbox_duration = time.time() - sandbox_start
             e2b_cost = (sandbox_duration / 3600) * E2B_CPU_COUNT * E2B_COST_PER_VCPU_HOUR
             return {

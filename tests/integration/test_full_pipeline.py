@@ -9,6 +9,7 @@ import pytest
 
 from src.backends.base import BackendRunner
 from src.cli_impl.base import CLIImpl
+from src.log_protocol import SESSION_LOG_FILENAME
 from src.models import AgentRunSpec
 from src.orchestrator import OrchestrationContext, process_task
 
@@ -22,7 +23,7 @@ class MockBackend(BackendRunner):
         log_dir = spec.log_dir
         if log_dir:
             log_dir.mkdir(parents=True, exist_ok=True)
-            (log_dir / "raw_stream.jsonl").write_text('{"event": "started"}')
+            (log_dir / SESSION_LOG_FILENAME).write_text("started\n")
         return {
             "attempts": [{"test_index": 0, "grid": [[1, 1], [1, 1]]}],
             "turns": 1,
@@ -55,15 +56,18 @@ class MockCLIImpl(CLIImpl):
         session_started: bool,
         task_id: str,
         test_index: int,
-        status_cb: Callable[[str, Any], None],
+        raw_line_cb: Callable[[str], None] | None = None,
     ) -> tuple[list[str], int, str, dict, bool]:
         return ([], 0, "", {}, False)
 
     def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         return None
 
-    def parse_stream_json(self, raw_lines, task_id):
+    def parse_stream_json(self, raw_lines, task_id, model=None):
         return [{"parsed": True, "lines": len(raw_lines)}]
+
+    def build_transcript_stream(self, task_id: str, model: str | None = None):
+        raise NotImplementedError
 
     def write_readable_log(self, rf, line, obj):
         rf.write(f"Parsed readable: {line}\\n")
@@ -111,7 +115,7 @@ async def test_process_task_integration(tmp_path, mock_raw_task_file):
 
     # Check that logs were generated
     log_dir = run_dir / "logs" / "test_task_id" / "t0" / "agent0"
-    assert (log_dir / "raw_stream.jsonl").exists()
+    assert (log_dir / SESSION_LOG_FILENAME).exists()
     assert (log_dir / "transcript.jsonl").exists()
     assert (log_dir / "readable.md").exists()
     assert (log_dir / "attempts.jsonl").exists()

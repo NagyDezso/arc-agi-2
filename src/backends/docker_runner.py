@@ -13,6 +13,7 @@ import docker
 from docker.errors import DockerException
 
 from src.backends.base import BackendRunner
+from src.log_protocol import SESSION_LOG_FILENAME, TRANSCRIPT_FILENAME, decode_stream_event
 from src.models import AgentRunSpec
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,12 @@ logger = logging.getLogger(__name__)
 DOCKER_IMAGE = os.environ.get("ARC_SOLVER_DOCKER_IMAGE", "arc-solver:latest")
 DOCKER_CPU_COUNT = int(os.environ.get("ARC_SOLVER_DOCKER_CPUS", "1"))
 DOCKER_MEMORY = os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "1g")
+
+_IGNORED_CONTAINER_LOG_SUBSTRINGS = (
+    "Performing one time database migration, may take a few minutes",
+    "sqlite-migration:done",
+    "Database migration complete.",
+)
 
 
 class DockerRunner(BackendRunner):
@@ -29,8 +36,36 @@ class DockerRunner(BackendRunner):
         cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
         return cleaned[:63] if cleaned else "arc-agent"
 
-    def _handle_agent_stdout_line(self, line: str, container_name: str) -> None:
-        logger.info(f"[agent:{container_name}] {line}")
+    def _route_agent_output_line(self, line: str, session_file, transcript_file) -> None:
+        if any(s in line for s in _IGNORED_CONTAINER_LOG_SUBSTRINGS):
+            return
+
+        event = decode_stream_event(line)
+        if event is None:
+            logger.info(line)
+            session_file.write(line + "\n")
+            session_file.flush()
+            return
+
+        if event["type"] == "status":
+            message = str(event.get("message", ""))
+            level = str(event.get("level", "info")).lower()
+            if message:
+                for part in message.splitlines() or [""]:
+                    if level == "error":
+                        logger.error(part)
+                    elif level == "warning":
+                        logger.warning(part)
+                    else:
+                        logger.info(part)
+                session_file.write(message + "\n")
+                session_file.flush()
+            return
+
+        entry = event.get("entry")
+        if isinstance(entry, dict):
+            transcript_file.write(json.dumps(entry) + "\n")
+            transcript_file.flush()
 
     def _ensure_docker_image(self, root_path: Path, cli_type: str) -> None:
         image_tag = f"arc-solver-{cli_type}:latest"
@@ -60,7 +95,8 @@ class DockerRunner(BackendRunner):
         image_tag = f"arc-solver-{cli_type}:latest"
 
         log_dir.mkdir(parents=True, exist_ok=True)
-        raw_stream_path = log_dir / "raw_stream.jsonl"
+        session_log_path = log_dir / SESSION_LOG_FILENAME
+        transcript_path = log_dir / TRANSCRIPT_FILENAME
 
         command = (
             "cp /workspace/config.json /root/config.json && "
@@ -86,7 +122,7 @@ class DockerRunner(BackendRunner):
             container = self.client.containers.create(**create_kwargs)
             container.start()
             output_buffer = ""
-            with raw_stream_path.open("a") as raw_f:
+            with session_log_path.open("a") as session_f, transcript_path.open("a") as transcript_f:
                 for chunk in container.logs(stream=True, follow=True):
                     output_buffer += chunk.decode(errors="replace")
                     while "\n" in output_buffer:
@@ -94,15 +130,11 @@ class DockerRunner(BackendRunner):
                         line = line.rstrip("\r")
                         if not line:
                             continue
-                        self._handle_agent_stdout_line(line, container_name)
-                        raw_f.write(line + "\n")
-                        raw_f.flush()
+                        self._route_agent_output_line(line, session_f, transcript_f)
 
                 if output_buffer.strip():
                     final_line = output_buffer.rstrip("\r")
-                    self._handle_agent_stdout_line(final_line, container_name)
-                    raw_f.write(final_line + "\n")
-                    raw_f.flush()
+                    self._route_agent_output_line(final_line, session_f, transcript_f)
 
             wait_result = container.wait(timeout=3600)
             exit_code = int(wait_result.get("StatusCode", -1))
@@ -149,6 +181,7 @@ class DockerRunner(BackendRunner):
             app_dir = run_root / "app"
             app_dir.mkdir()
             shutil.copy(spec.root_path / "agent_runner.py", app_dir / "agent_runner.py")
+            shutil.copy(spec.root_path / "log_protocol.py", app_dir / "log_protocol.py")
             shutil.copytree(spec.root_path / "cli_impl", app_dir / "cli_impl")
 
             result, stderr_lines, exit_code = await asyncio.to_thread(

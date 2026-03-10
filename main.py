@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     parser = argparse.ArgumentParser(description="ARC-AGI CLI Solver (Unified)")
     parser.add_argument("--tasks", default="all", help="'all' (default) | comma-separated IDs")
-    parser.add_argument("--num-agents", type=int, default=1, help="Agents per test input (default: 1)")
+    parser.add_argument("--num-agents", type=int, default=2, help="Agents per test input (default: 2)")
     parser.add_argument(
         "--max-iterations",
         type=int,
         default=5,
-        help="Max transform loop iterations per agent (default: 10)",
+        help="Max transform loop iterations per agent (default: 5)",
     )
     parser.add_argument(
         "--model",
@@ -44,7 +44,7 @@ def main() -> None:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=5,
+        default=2,
         help="Max simultaneous agents (default: 5). Set to 0 for unlimited.",
     )
     parser.add_argument(

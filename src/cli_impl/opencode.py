@@ -3,7 +3,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .base import CLIImpl
+from .base import CLIImpl, TranscriptStreamParser
+
+# (input $/1M, output $/1M, cache_read $/1M)
+OPENCODE_PRICING = {
+    "kilo/minimax/minimax-m2.5": (0.29, 1.20, 0.00),
+    "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
+}
 
 _TOOL_NAME_MAP = {
     "bash": "Bash",
@@ -15,6 +21,118 @@ _TOOL_NAME_MAP = {
     "list": "Glob",
     "task": "Task",
 }
+
+
+class _OpenCodeTranscriptStream(TranscriptStreamParser):
+    def __init__(self, cli: "OpenCodeCLI", model: str | None = None):
+        self._cli = cli
+        self._model = model
+        self._turn_counter = 0
+        self._current_blocks: list[dict[str, Any]] = []
+        self._total_tokens = {"input": 0, "output": 0, "cache_read": 0}
+
+    def _flush_assistant(self, out: list[dict[str, Any]]) -> None:
+        if self._current_blocks:
+            self._turn_counter += 1
+            out.append(
+                {
+                    "type": "assistant",
+                    "turn": self._turn_counter,
+                    "content": self._current_blocks,
+                }
+            )
+            self._current_blocks = []
+
+    def consume_raw_line(self, raw_line: str) -> list[dict]:
+        out: list[dict] = []
+        line = raw_line.strip()
+        if not line:
+            return out
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            return out
+
+        evt_type = obj.get("type", "")
+        part = obj.get("part", {})
+
+        if evt_type == "text":
+            text = part.get("text", "")
+            if text.strip():
+                self._current_blocks.append({"type": "text", "text": text.strip()})
+
+        elif evt_type == "tool_use":
+            tool_name = part.get("tool", "")
+            call_id = part.get("callID", "")
+            state = part.get("state", {})
+            inp = state.get("input", {})
+            output = state.get("output", "")
+
+            viewer_name = _TOOL_NAME_MAP.get(tool_name.lower(), tool_name)
+            viewer_params = self._cli._map_tool_params(tool_name, inp)
+
+            self._current_blocks.append(
+                {
+                    "type": "tool_use",
+                    "name": viewer_name,
+                    "id": call_id,
+                    "input": viewer_params,
+                }
+            )
+
+            if output and len(output) > 10:
+                self._flush_assistant(out)
+                truncated = output[:5000] if len(output) > 5000 else output
+                out.append(
+                    {
+                        "type": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": call_id,
+                                "content": truncated,
+                            }
+                        ],
+                    }
+                )
+
+        elif evt_type == "step_finish":
+            self._flush_assistant(out)
+            tokens = part.get("tokens", {})
+            self._total_tokens["input"] += tokens.get("input", 0)
+            self._total_tokens["output"] += tokens.get("output", 0)
+            self._total_tokens["cache_read"] += tokens.get("cache", {}).get("read", 0)
+
+        return out
+
+    def finalize(self) -> list[dict]:
+        out: list[dict] = []
+        self._flush_assistant(out)
+        if self._total_tokens["input"] > 0 or self._total_tokens["output"] > 0:
+            cost = (
+                self._cli.calculate_cost(
+                    self._model,
+                    self._total_tokens["input"],
+                    self._total_tokens["cache_read"],
+                    self._total_tokens["output"],
+                )
+                if self._model
+                else 0.0
+            )
+            out.append(
+                {
+                    "type": "result",
+                    "cost": cost,
+                    "num_turns": self._turn_counter,
+                    "usage": {
+                        "input_tokens": self._total_tokens["input"],
+                        "output_tokens": self._total_tokens["output"],
+                        "total_tokens": self._total_tokens["input"] + self._total_tokens["output"],
+                        "cached_tokens": self._total_tokens["cache_read"],
+                    },
+                }
+            )
+        return out
 
 
 class OpenCodeCLI(CLIImpl):
@@ -32,7 +150,15 @@ class OpenCodeCLI(CLIImpl):
         pass
 
     def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
-        return 0.0
+        pricing = OPENCODE_PRICING.get(model)
+        if pricing is None:
+            return 0.0
+        input_rate, output_rate, cached_rate = pricing
+        return (
+            input_tokens * input_rate / 1_000_000
+            + cached_tokens * cached_rate / 1_000_000
+            + output_tokens * output_rate / 1_000_000
+        )
 
     def run_session(
         self,
@@ -44,6 +170,7 @@ class OpenCodeCLI(CLIImpl):
         session_started: bool,
         task_id: str,
         test_index: int,
+        raw_line_cb: Any | None = None,
     ) -> tuple[list[str], int, str, dict, bool]:
 
         cmd = ["opencode", "run", "--format", "json"]
@@ -82,6 +209,8 @@ class OpenCodeCLI(CLIImpl):
             if not line:
                 continue
             raw_lines.append(line)
+            if raw_line_cb is not None:
+                raw_line_cb(line)
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
@@ -195,102 +324,16 @@ class OpenCodeCLI(CLIImpl):
             }
         return params
 
-    def parse_stream_json(self, raw_lines: list[str], task_id: str) -> list[dict]:
-        entries = []
-        turn_counter = 0
-        current_blocks = []
-        total_tokens = {"input": 0, "output": 0, "cache_read": 0}
-
-        def flush_assistant():
-            nonlocal current_blocks, turn_counter
-            if current_blocks:
-                turn_counter += 1
-                entries.append(
-                    {
-                        "type": "assistant",
-                        "turn": turn_counter,
-                        "content": current_blocks,
-                    }
-                )
-                current_blocks = []
-
+    def parse_stream_json(self, raw_lines: list[str], task_id: str, model: str | None = None) -> list[dict]:
+        stream = self.build_transcript_stream(task_id, model=model)
+        entries: list[dict] = []
         for line in raw_lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            evt_type = obj.get("type", "")
-            part = obj.get("part", {})
-
-            if evt_type == "text":
-                text = part.get("text", "")
-                if text.strip():
-                    current_blocks.append({"type": "text", "text": text.strip()})
-
-            elif evt_type == "tool_use":
-                tool_name = part.get("tool", "")
-                call_id = part.get("callID", "")
-                state = part.get("state", {})
-                inp = state.get("input", {})
-                output = state.get("output", "")
-
-                viewer_name = _TOOL_NAME_MAP.get(tool_name.lower(), tool_name)
-                viewer_params = self._map_tool_params(tool_name, inp)
-
-                current_blocks.append(
-                    {
-                        "type": "tool_use",
-                        "name": viewer_name,
-                        "id": call_id,
-                        "input": viewer_params,
-                    }
-                )
-
-                if output and len(output) > 10:
-                    flush_assistant()
-                    truncated = output[:5000] if len(output) > 5000 else output
-                    entries.append(
-                        {
-                            "type": "user",
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": call_id,
-                                    "content": truncated,
-                                }
-                            ],
-                        }
-                    )
-
-            elif evt_type == "step_finish":
-                flush_assistant()
-                tokens = part.get("tokens", {})
-                total_tokens["input"] += tokens.get("input", 0)
-                total_tokens["output"] += tokens.get("output", 0)
-                total_tokens["cache_read"] += tokens.get("cache", {}).get("read", 0)
-
-        flush_assistant()
-
-        if total_tokens["input"] > 0 or total_tokens["output"] > 0:
-            entries.append(
-                {
-                    "type": "result",
-                    "cost": 0,
-                    "num_turns": turn_counter,
-                    "usage": {
-                        "input_tokens": total_tokens["input"],
-                        "output_tokens": total_tokens["output"],
-                        "total_tokens": total_tokens["input"] + total_tokens["output"],
-                        "cached_tokens": total_tokens["cache_read"],
-                    },
-                }
-            )
-
+            entries.extend(stream.consume_raw_line(line))
+        entries.extend(stream.finalize())
         return entries
+
+    def build_transcript_stream(self, task_id: str, model: str | None = None) -> TranscriptStreamParser:
+        return _OpenCodeTranscriptStream(self, model=model)
 
     def write_readable_log(self, rf: Any, line: str, obj: dict):
         evt_type = obj.get("type", "")

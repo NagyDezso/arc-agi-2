@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.backends.docker_runner import DockerRunner
+from src.log_protocol import SESSION_LOG_FILENAME
 from src.models import AgentRunSpec
 
 
@@ -43,14 +44,12 @@ async def test_docker_real_execution():
         # Verify run_agent outputs
         assert "error" not in result or result["error"] == "", f"Agent run failed: {result.get('error')}"
 
-        # Verify raw_stream.jsonl was created and populated
-        raw_stream_path = log_dir / "raw_stream.jsonl"
-        assert raw_stream_path.exists(), "raw_stream.jsonl was not created by Docker runner"
+        # Verify session.log was created and populated
+        session_log_path = log_dir / SESSION_LOG_FILENAME
+        assert session_log_path.exists(), "session.log was not created by Docker runner"
 
-        content = raw_stream_path.read_text()
-        assert content.strip() != "", "raw_stream.jsonl is empty"
+        content = session_log_path.read_text()
+        assert content.strip() != "", "session.log is empty"
 
         # Check if the runner logged the agent start marker to stdout and captured it
-        assert "[agent]" in content and " started " in content, (
-            "The agent 'started' marker was not found in the raw stream"
-        )
+        assert " started " in content, "The agent 'started' marker was not found in the session log"

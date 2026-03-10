@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a Kaggle submission from Gemini CLI solver results.
+"""Build a Kaggle submission from ARC-AGI solver results.
 
 For each task and each test index:
   - Pool ALL grids from all agents into a single list
@@ -11,18 +11,20 @@ Writes submission.json and cost_breakdown.json to project root,
 and scores against ground truth.
 
 Usage:
-  python3 submission.py          # reads from gemini-cli-solver/results/latest
+  python3 submission.py          # reads from src/results/latest
+  python3 submission.py --results-dir path/to/results  # custom path
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import re
 import sys
 from collections import Counter
 from pathlib import Path
-
+from typing import Any
 
 Grid = list[list[int]]
 
@@ -37,7 +39,7 @@ def canonicalize_grid(grid: Grid) -> str:
 def top_k_vote(grids: list[Grid], k: int = 2) -> list[Grid]:
     """Return the top-k most common grids from a pool, ordered by frequency.
 
-    If the pool is empty, returns an empty list.  Ties are broken by
+    If the pool is empty, returns an empty list. Ties are broken by
     whichever grid was seen first (Counter.most_common is stable).
     """
     if not grids:
@@ -124,7 +126,7 @@ def load_solver_grids(results_dir: Path) -> dict[str, dict[int, list[Grid]]]:
 # ── Summary loading ───────────────────────────────────────────────────────
 
 
-def load_summary(results_dir: Path) -> dict | None:
+def load_summary(results_dir: Path) -> dict[str, Any] | None:
     """Load summary.json from a solver results directory."""
     summary_file = results_dir / "summary.json"
     if not summary_file.exists():
@@ -192,7 +194,7 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
     """Fallback: aggregate per-agent costs from task_results/*.json files.
 
     Used when summary.json is missing (e.g. process killed before writing it).
-    Returns: {task_id: {"api_cost": float, "e2b_cost": float, "total_cost": float, "usage": dict}}
+    Returns: {task_id: {"api_cost": float, "backend_cost": float, "total_cost": float, "usage": dict}}
     """
     task_results_dir = results_dir / "task_results"
     if not task_results_dir.is_dir():
@@ -205,55 +207,89 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
             data = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        agents = data.get("agents", {})
-        api_cost = 0.0
-        e2b_cost = 0.0
-        total_cost = 0.0
-        usage: dict[str, int] = {}
-        for agent_info in agents.values():
-            api_cost += agent_info.get("cost", 0)
-            e2b_cost += agent_info.get("e2b_cost", 0)
-            total_cost += agent_info.get("total_cost", 0)
-            for k, v in agent_info.get("usage", {}).items():
-                usage[k] = usage.get(k, 0) + (v if isinstance(v, int) else 0)
-        out[task_id] = {
-            "api_cost": api_cost,
-            "e2b_cost": e2b_cost,
-            "total_cost": total_cost,
-            "usage": usage,
-        }
+
+        # Prefer score section if available (new format)
+        score = data.get("score", {})
+        if score:
+            out[task_id] = {
+                "api_cost": score.get("api_cost", 0),
+                "backend_cost": score.get("backend_cost", 0),
+                "total_cost": score.get("total_cost", 0),
+                "usage": score.get("usage", {}),
+            }
+        else:
+            # Fallback: aggregate from agents
+            agents = data.get("agents", {})
+            api_cost = 0.0
+            backend_cost = 0.0
+            total_cost = 0.0
+            usage: dict[str, int] = {}
+            for agent_info in agents.values():
+                api_cost += agent_info.get("cost", 0)
+                backend_cost += agent_info.get("backend_cost", 0)
+                total_cost += agent_info.get("total_cost", 0)
+                for k, v in agent_info.get("usage", {}).items():
+                    usage[k] = usage.get(k, 0) + (v if isinstance(v, int) else 0)
+            out[task_id] = {
+                "api_cost": api_cost,
+                "backend_cost": backend_cost,
+                "total_cost": total_cost,
+                "usage": usage,
+            }
     return out
 
 
 def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
-    """Extract cost breakdown from the Gemini CLI solver.
+    """Extract cost breakdown from the solver results.
 
     Falls back to aggregating from task_results/*.json when summary.json
     is missing (e.g. process killed before writing it).
     """
     summary = load_summary(results_dir)
 
+    # Get CLI and backend info from summary
+    cli = "unknown"
+    backend = "unknown"
+    model = "unknown"
+    if summary:
+        cli = summary.get("cli", "unknown")
+        backend = summary.get("backend", "unknown")
+        model = summary.get("model", "unknown")
+
+    # Determine backend pricing description
+    if backend == "e2b":
+        backend_pricing = {
+            "vcpus": 2,
+            "cost_per_vcpu_hour_usd": 0.05,
+            "total_hourly_rate_usd": 0.10,
+            "formula": "(duration_seconds / 3600) * vcpus * cost_per_vcpu_hour",
+        }
+    elif backend == "docker":
+        backend_pricing = {
+            "note": "Local Docker execution - no cloud infrastructure costs",
+            "cost": 0.0,
+        }
+    else:
+        backend_pricing = {"note": f"Unknown backend: {backend}"}
+
     breakdown = {
         "_documentation": {
             "purpose": "Cost breakdown",
             "generated_by": "submission.py",
-            "e2b_pricing": {
-                "vcpus": 2,
-                "cost_per_vcpu_hour_usd": 0.05,
-                "total_hourly_rate_usd": 0.10,
-                "formula": "(duration_seconds / 3600) * vcpus * cost_per_vcpu_hour",
-            },
-            "note": "API costs calculated from Gemini CLI token reports using published pricing",
+            "cli": cli,
+            "backend": backend,
+            "backend_pricing": backend_pricing,
+            "note": f"API costs calculated from {cli} CLI token reports using published pricing",
         },
-        "gemini_cli": {},
-        "metadata": {"e2b_vcpus": 2, "e2b_cost_per_vcpu_hour": 0.05, "num_tasks": num_tasks},
+        "solver": {},
+        "metadata": {"cli": cli, "backend": backend, "num_tasks": num_tasks},
     }
 
     if summary:
         tasks = summary.get("tasks", {})
-        api_cost = sum(task.get("gemini_api_cost", 0.0) for task in tasks.values())
-        e2b_cost = sum(task.get("e2b_cost", 0.0) for task in tasks.values())
-        total = api_cost + e2b_cost
+        api_cost = sum(task.get("api_cost", 0.0) for task in tasks.values())
+        backend_cost = sum(task.get("backend_cost", 0.0) for task in tasks.values())
+        total = api_cost + backend_cost
 
         total_usage = {
             "input_tokens": 0,
@@ -266,16 +302,18 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
             total_usage["cached_tokens"] += usage.get("cached_tokens", 0)
             total_usage["output_tokens"] += usage.get("output_tokens", 0)
 
-        breakdown["gemini_cli"] = {
-            "model": summary.get("model", "unknown"),
-            "gemini_api_cost": round(api_cost, 4),
-            "e2b_cost": round(e2b_cost, 4),
+        breakdown["solver"] = {
+            "cli": cli,
+            "backend": backend,
+            "model": model,
+            "api_cost": round(api_cost, 4),
+            "backend_cost": round(backend_cost, 4),
             "total_cost": round(total, 4),
             "usage": total_usage,
             "per_task": {
                 task_id: {
-                    "gemini_api_cost": round(task.get("gemini_api_cost", 0.0), 4),
-                    "e2b_cost": round(task.get("e2b_cost", 0.0), 4),
+                    "api_cost": round(task.get("api_cost", 0.0), 4),
+                    "backend_cost": round(task.get("backend_cost", 0.0), 4),
                     "total_cost": round(task.get("total_cost", 0.0), 4),
                     "elapsed_seconds": round(task.get("elapsed", 0.0), 2),
                     "usage": task.get("usage", {}),
@@ -288,22 +326,24 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
         task_costs = _aggregate_costs_from_task_results(results_dir)
         if task_costs:
             api_cost = sum(t["api_cost"] for t in task_costs.values())
-            e2b_cost = sum(t["e2b_cost"] for t in task_costs.values())
-            total = api_cost + e2b_cost
+            backend_cost = sum(t["backend_cost"] for t in task_costs.values())
+            total = sum(t["total_cost"] for t in task_costs.values())
             total_usage: dict[str, int] = {}
             for t in task_costs.values():
                 for k, v in t["usage"].items():
                     total_usage[k] = total_usage.get(k, 0) + v
-            breakdown["gemini_cli"] = {
-                "model": "unknown (from task_results)",
-                "gemini_api_cost": round(api_cost, 4),
-                "e2b_cost": round(e2b_cost, 4),
+            breakdown["solver"] = {
+                "cli": cli,
+                "backend": backend,
+                "model": f"{model} (from task_results)",
+                "api_cost": round(api_cost, 4),
+                "backend_cost": round(backend_cost, 4),
                 "total_cost": round(total, 4),
                 "usage": total_usage,
                 "per_task": {
                     task_id: {
-                        "gemini_api_cost": round(t["api_cost"], 4),
-                        "e2b_cost": round(t["e2b_cost"], 4),
+                        "api_cost": round(t["api_cost"], 4),
+                        "backend_cost": round(t["backend_cost"], 4),
                         "total_cost": round(t["total_cost"], 4),
                         "usage": t["usage"],
                     }
@@ -311,10 +351,12 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                 },
             }
         else:
-            breakdown["gemini_cli"] = {
+            breakdown["solver"] = {
+                "cli": cli,
+                "backend": backend,
                 "model": "N/A",
-                "gemini_api_cost": 0.0,
-                "e2b_cost": 0.0,
+                "api_cost": 0.0,
+                "backend_cost": 0.0,
                 "total_cost": 0.0,
                 "usage": {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0},
                 "per_task": {},
@@ -329,18 +371,19 @@ def print_cost_report(cost_breakdown: dict) -> None:
     logger.info("COST BREAKDOWN")
     logger.info(f"{'=' * 60}")
 
-    g = cost_breakdown["gemini_cli"]
-    g_usage = g.get("usage", {})
-    logger.info("\nGemini CLI Solver:")
-    logger.info(f"  Model:         {g['model']}")
-    logger.info(f"  Gemini API:    ${g['gemini_api_cost']:.4f}")
-    logger.info(f"  E2B Infra:     ${g['e2b_cost']:.4f}")
-    logger.info(f"  TOTAL:         ${g['total_cost']:.4f}")
-    if g_usage:
+    s = cost_breakdown["solver"]
+    s_usage = s.get("usage", {})
+    logger.info(f"\nCLI:      {s.get('cli', 'unknown')}")
+    logger.info(f"Backend:  {s.get('backend', 'unknown')}")
+    logger.info(f"Model:    {s['model']}")
+    logger.info(f"  API Cost:      ${s['api_cost']:.4f}")
+    logger.info(f"  Backend Cost:  ${s['backend_cost']:.4f}")
+    logger.info(f"  TOTAL:         ${s['total_cost']:.4f}")
+    if s_usage:
         logger.info(
-            f"  Tokens:        input={g_usage.get('input_tokens', 0):,}, "
-            f"cached={g_usage.get('cached_tokens', 0):,}, "
-            f"output={g_usage.get('output_tokens', 0):,}"
+            f"  Tokens:        input={s_usage.get('input_tokens', 0):,}, "
+            f"cached={s_usage.get('cached_tokens', 0):,}, "
+            f"output={s_usage.get('output_tokens', 0):,}"
         )
     logger.info(f"{'=' * 60}")
 
@@ -359,6 +402,8 @@ _SUSPICIOUS_PATTERNS = [
     # API key env var names
     r"GEMINI_API_KEY",
     r"GOOGLE_API_KEY",
+    r"KILO_API_KEY",
+    r"GITHUB_TOKEN",
     # Env inspection
     r"printenv",
     r"os\.environ",
@@ -386,7 +431,7 @@ def check_transcripts(results_dir: Path) -> list[str]:
             for pattern in _COMPILED_PATTERNS:
                 match = pattern.search(line)
                 if match:
-                    warnings.append(f"[gemini-cli] {rel}:{line_num}: found '{match.group()}'")
+                    warnings.append(f"[{rel}] {rel}:{line_num}: found '{match.group()}'")
 
     return warnings
 
@@ -435,6 +480,27 @@ def build_submission(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Build Kaggle submission from ARC-AGI solver results")
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=None,
+        help="Path to results directory (default: src/results/latest)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Path to data directory with ground truth (default: data/ next to script)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output path for submission.json (default: submission.json in script dir)",
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
@@ -442,19 +508,29 @@ def main() -> None:
     )
 
     script_dir = Path(__file__).resolve().parent
-    data_dir = script_dir / "data"
-    results_dir = script_dir / "gemini-cli-solver" / "results" / "latest"
-    output_path = script_dir / "submission.json"
+    data_dir = args.data_dir or script_dir / "data"
+
+    # Determine results directory
+    if args.results_dir:
+        results_dir = args.results_dir
+    else:
+        results_dir = script_dir / "src" / "results" / "latest"
+
+    output_path = args.output or script_dir / "submission.json"
 
     # Resolve symlinks (e.g. results/latest -> actual run dir)
     if results_dir.is_symlink():
         results_dir = results_dir.resolve()
 
+    if not results_dir.exists():
+        logger.error(f"Results directory not found: {results_dir}")
+        sys.exit(1)
+
     logger.info(f"Results dir: {results_dir}")
 
     # Load results
     solver_grids = load_solver_grids(results_dir)
-    logger.info(f"Loaded {len(solver_grids)} tasks from Gemini CLI solver")
+    logger.info(f"Loaded {len(solver_grids)} tasks from solver results")
 
     # Load ground truth
     ground_truth = load_ground_truth(data_dir)
@@ -476,7 +552,7 @@ def main() -> None:
     logger.info("Extracting cost breakdown...")
     cost_breakdown = extract_cost_breakdown(results_dir, num_tasks=len(ground_truth))
     print_cost_report(cost_breakdown)
-    write_cost_breakdown_file(cost_breakdown, script_dir)
+    write_cost_breakdown_file(cost_breakdown, output_path.parent)
 
     # Security: check transcripts for API key access attempts
     logger.info(f"\n{'=' * 60}")
@@ -484,8 +560,10 @@ def main() -> None:
     security_warnings = check_transcripts(results_dir)
     if security_warnings:
         logger.info(f"\n  WARNING: {len(security_warnings)} suspicious pattern(s) found:")
-        for w in security_warnings:
+        for w in security_warnings[:20]:  # Limit output
             logger.info(f"    {w}")
+        if len(security_warnings) > 20:
+            logger.info(f"    ... and {len(security_warnings) - 20} more")
     else:
         logger.info("  Clean — no suspicious patterns found.")
     logger.info(f"{'=' * 60}")

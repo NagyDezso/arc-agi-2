@@ -1,23 +1,30 @@
+import io
+import json
 import logging
 
 from src.backends.docker_runner import DockerRunner
+from src.log_protocol import encode_status_event, encode_transcript_event
 
 
-def test_handle_agent_stdout_line(caplog):
+def test_docker_runner_routes_status_and_transcript_lines(caplog):
+    runner = DockerRunner()
+    session_file = io.StringIO()
+    transcript_file = io.StringIO()
 
-    caplog.set_level(logging.INFO)
+    with caplog.at_level(logging.INFO):
+        runner._route_agent_output_line(
+            encode_status_event("agent started", level="info"),
+            session_file,
+            transcript_file,
+        )
+        runner._route_agent_output_line(
+            encode_transcript_event({"type": "assistant", "turn": 1, "content": []}),
+            session_file,
+            transcript_file,
+        )
+        runner._route_agent_output_line("plain fallback line", session_file, transcript_file)
 
-    line = '{"event": "started", "agent_id": "test_agent", "model": "test-model"}'
-    DockerRunner()._handle_agent_stdout_line(line, "arc-agent-123")
-
-    assert any("[agent:arc-agent-123]" in record.message for record in caplog.records)
-    assert any("started" in record.message for record in caplog.records)
-
-
-def test_handle_agent_stdout_line_plain_text(caplog):
-
-    caplog.set_level(logging.INFO)
-
-    line = "Just some standard output not json"
-    DockerRunner()._handle_agent_stdout_line(line, "my-container")
-    assert any("[agent:my-container]" in record.message for record in caplog.records)
+    assert session_file.getvalue() == "agent started\nplain fallback line\n"
+    assert json.loads(transcript_file.getvalue()) == {"type": "assistant", "turn": 1, "content": []}
+    assert "agent started" in caplog.text
+    assert "plain fallback line" in caplog.text

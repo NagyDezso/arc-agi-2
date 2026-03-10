@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.log_protocol import SESSION_LOG_FILENAME
 from src.models import AgentRunSpec
 from src.orchestrator import OrchestrationContext, process_task, run_all
 
@@ -33,15 +34,18 @@ class MockCLIImpl:
         session_started: bool,
         task_id: str,
         test_index: int,
-        status_cb: Any,
+        raw_line_cb: Any | None = None,
     ) -> tuple[list[str], int, str, dict, bool]:
         return ([], 0, "", {}, False)
 
     def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         return None
 
-    def parse_stream_json(self, raw_lines: list[str], task_id: str) -> list[dict]:
+    def parse_stream_json(self, raw_lines: list[str], task_id: str, model: str | None = None) -> list[dict]:
         return [{"parsed": True, "lines": len(raw_lines)}]
+
+    def build_transcript_stream(self, task_id: str, model: str | None = None):
+        raise NotImplementedError
 
     def write_readable_log(self, rf: Any, line: str, obj: dict) -> None:
         rf.write(f"Parsed readable: {line}\n")
@@ -67,8 +71,7 @@ class SequenceBackend:
                 raise result
             log_dir = spec.log_dir
             log_dir.mkdir(parents=True, exist_ok=True)
-            if "raw_lines" in result and result["raw_lines"]:
-                (log_dir / "raw_stream.jsonl").write_text("\n".join(result["raw_lines"]) + "\n")
+            (log_dir / SESSION_LOG_FILENAME).write_text("started\n")
             return result
         finally:
             self.current_runs -= 1

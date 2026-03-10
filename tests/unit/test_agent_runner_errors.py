@@ -32,6 +32,8 @@ def test_run_agent_should_stop_on_fatal_errors(error_msg):
         False,  # session_started_now
     )
     mock_impl.calculate_cost.return_value = 0.0
+    mock_impl.build_transcript_stream.return_value.consume_raw_line.return_value = []
+    mock_impl.build_transcript_stream.return_value.finalize.return_value = []
 
     config = {
         "task_id": "test_task",

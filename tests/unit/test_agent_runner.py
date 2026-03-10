@@ -7,7 +7,7 @@ import numpy as np
 # Add src to sys path to resolve cli_impl import inside agent_runner
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from src.agent_runner import _format_diff, test_transform
+from src.agent_runner import _format_diff, run_transform
 
 
 def test_format_diff():
@@ -29,7 +29,7 @@ def test_format_diff_shape_mismatch():
 
 
 @patch("src.agent_runner.run_with_timeout")
-def test_test_transform_success(mock_run, tmp_path):
+def test_run_transform_success(mock_run, tmp_path):
     # Mock run_with_timeout to just call the function directly
     mock_run.side_effect = lambda fn, arg: fn(arg)
 
@@ -45,7 +45,7 @@ def transform(grid):
         {"input": [[5, 6]], "output": [[6, 7]]},
     ]
 
-    all_pass, msg, fn = test_transform(transform_file, train_examples)
+    all_pass, msg, fn = run_transform(transform_file, train_examples)
     assert all_pass is True
     assert msg == "All training examples pass."
     assert fn is not None
@@ -64,7 +64,7 @@ def transform(grid):
 
     train_examples = [{"input": [[1, 2]], "output": [[2, 3]]}]
 
-    all_pass, msg, fn = test_transform(transform_file, train_examples)
+    all_pass, msg, fn = run_transform(transform_file, train_examples)
     assert all_pass is False
     assert "Value mismatch" in msg
     assert fn is None

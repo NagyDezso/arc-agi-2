@@ -1,6 +1,16 @@
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class TranscriptStreamParser(Protocol):
+    def consume_raw_line(self, raw_line: str) -> list[dict]:
+        """Consumes one raw CLI JSON line and returns complete transcript entries."""
+        ...
+
+    def finalize(self) -> list[dict]:
+        """Flushes buffered transcript entries at end-of-run."""
+        ...
 
 
 @runtime_checkable
@@ -23,7 +33,7 @@ class CLIImpl(Protocol):
         session_started: bool,
         task_id: str,
         test_index: int,
-        status_cb: Callable[[str, Any], None],
+        raw_line_cb: Any | None = None,
     ) -> tuple[list[str], int, str, dict, bool]:
         """Runs a CLI session and returns (raw_lines, turns, stderr, stats, session_started)."""
         ...
@@ -32,8 +42,12 @@ class CLIImpl(Protocol):
         """Extracts the final grid from the session output lines."""
         ...
 
-    def parse_stream_json(self, raw_lines: list[str], task_id: str) -> list[dict]:
+    def parse_stream_json(self, raw_lines: list[str], task_id: str, model: str | None = None) -> list[dict]:
         """Parses the raw JSON stream into a transcript format for logging."""
+        ...
+
+    def build_transcript_stream(self, task_id: str, model: str | None = None) -> TranscriptStreamParser:
+        """Builds a stateful parser used for continuous transcript streaming."""
         ...
 
     def write_readable_log(self, rf: Any, line: str, obj: dict) -> None:
