@@ -9,7 +9,7 @@ def test_gemini_real_tool_usage():
     with tempfile.TemporaryDirectory() as tmpdir:
         ws_path = Path(tmpdir)
         target_file = ws_path / "gemini_secret.txt"
-        target_file.write_text("Gemini successfully read this secret!")
+        target_file.write_text("Gemini successfully read this secret!", encoding="utf-8")
 
         cli = GeminiCLI()
         # Using a cheap flash model for integration testing

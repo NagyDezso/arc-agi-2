@@ -392,7 +392,7 @@ def print_cost_report(cost_breakdown: dict) -> None:
 def write_cost_breakdown_file(cost_breakdown: dict, output_dir: Path) -> None:
     """Write cost breakdown to cost_breakdown.json."""
     cost_file = output_dir / "cost_breakdown.json"
-    cost_file.write_text(json.dumps(cost_breakdown, indent=2))
+    cost_file.write_text(json.dumps(cost_breakdown, indent=2), encoding="utf-8")
     logger.info(f"Wrote cost breakdown to: {cost_file}")
 
 
@@ -569,7 +569,7 @@ def main() -> None:
     logger.info(f"{'=' * 60}")
 
     # Write submission
-    output_path.write_text(json.dumps(submission))
+    output_path.write_text(json.dumps(submission), encoding="utf-8")
     logger.info(f"\nWrote submission to: {output_path}")
 
 

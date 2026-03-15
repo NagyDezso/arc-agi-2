@@ -57,7 +57,7 @@ class DockerRunner(BackendRunner):
         run_start = time.time()
 
         try:
-            (run_root / "config.json").write_text(config.model_dump_json())
+            (run_root / "config.json").write_text(config.model_dump_json(), encoding="utf-8")
             # Create src package structure for Python imports to work
             app = run_root / "app"
             app.mkdir()
@@ -96,7 +96,7 @@ class DockerRunner(BackendRunner):
             container = self.client.containers.create(**create_kwargs)
             container.start()
             output_buffer = ""
-            with session_log_path.open("a") as session_f, transcript_path.open("a") as transcript_f:
+            with session_log_path.open("a", encoding="utf-8") as session_f, transcript_path.open("a", encoding="utf-8") as transcript_f:
                 for chunk in container.logs(stream=True, follow=True):
                     output_buffer += chunk.decode(errors="replace")
                     while "\n" in output_buffer:

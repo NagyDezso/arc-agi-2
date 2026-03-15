@@ -9,7 +9,7 @@ def test_opencode_real_tool_usage():
     with tempfile.TemporaryDirectory() as tmpdir:
         ws_path = Path(tmpdir)
         target_file = ws_path / "secret_info.txt"
-        target_file.write_text("Hello from the secret integration test file!")
+        target_file.write_text("Hello from the secret integration test file!", encoding="utf-8")
 
         cli = OpenCodeCLI()
         model = "opencode/big-pickle"

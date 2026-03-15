@@ -41,7 +41,7 @@ class SequenceBackend(BackendRunner):
             output = self._outputs.pop(0)
             log_dir = spec.log_dir
             log_dir.mkdir(parents=True, exist_ok=True)
-            (log_dir / SESSION_LOG_FILENAME).write_text("started\n")
+            (log_dir / SESSION_LOG_FILENAME).write_text("started\n", encoding="utf-8")
             return output
         finally:
             self.current_runs -= 1

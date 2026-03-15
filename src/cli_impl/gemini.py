@@ -94,7 +94,7 @@ class GeminiCLI(BaseCLI):
                     }
                 )
             )
-        (gemini_dir / "settings.json").write_text(settings)
+        (gemini_dir / "settings.json").write_text(settings, encoding="utf-8")
 
     def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
         pricing = GEMINI_PRICING.get(model)

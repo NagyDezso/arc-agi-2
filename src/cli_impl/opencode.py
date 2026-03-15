@@ -35,7 +35,7 @@ class OpenCodeCLI(BaseCLI):
         # OpenCode auth initialization
         auth_path = Path("/root/.local/share/opencode")
         auth_path.mkdir(parents=True, exist_ok=True)
-        with (auth_path / "auth.json").open("w") as auth_file:
+        with (auth_path / "auth.json").open("w", encoding="utf-8") as auth_file:
             json.dump(
                 {
                     "github-copilot": {

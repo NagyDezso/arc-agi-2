@@ -23,7 +23,7 @@ def temp_workspace():
 @pytest.fixture
 def mock_raw_task_file(temp_workspace, mock_task_data):
     task_file = temp_workspace / "task.json"
-    task_file.write_text(json.dumps(mock_task_data))
+    task_file.write_text(json.dumps(mock_task_data), encoding="utf-8")
     return task_file
 
 

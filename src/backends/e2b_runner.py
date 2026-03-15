@@ -70,8 +70,8 @@ class E2BRunner(BackendRunner):
             for f in (ROOT / "cli_impl").glob("*.py"):
                 await sandbox.files.write(f"/app/cli_impl/{f.name}", f.read_text())
 
-            session_f = session_log_path.open("a")
-            transcript_f = transcript_path.open("a")
+            session_f = session_log_path.open("a", encoding="utf-8")
+            transcript_f = transcript_path.open("a", encoding="utf-8")
             stdout_buffer = ""
 
             def on_stdout(output: Stdout) -> None:
