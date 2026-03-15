@@ -3,13 +3,15 @@ name = "opencode-solver"
 version = "0.1.0"
 description = "OpenCode CLI agent solver for ARC-AGI tasks"
 requires-python = ">=3.11"
-dependencies = ["docker>=7.1.0", "python-dotenv"]
+dependencies = ["docker>=7.1.0", "pydantic>=2.0", "python-dotenv", "typer>=0.15.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
-    "integration: marks tests as integration tests",
-    "unit: marks tests as pure unit tests",
+    "unit: marks tests as pure unit tests (single function/class in isolation)",
+    "functional: marks tests as functional tests (component workflows with mocked deps)",
+    "integration: marks tests as integration tests (real external dependencies)",
 ]
 addopts = "-ra -v"
 
@@ -34,10 +36,11 @@ ignore = [
     "S311",    # Standard pseudo-random generators are not suitable for cryptographic purposes
     "S603",    # `subprocess` call: check for execution of untrusted input
     "DTZ005",  # call-datetime-now-without-tzinfo
+    "S602",  # subprocess-popen-with-shell-equals-true
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"test_*.py" = [
+"tests/**/*.py" = [
     "S101",    # asserts allowed in tests...
     "ARG",     # Unused function args -> fixtures nevertheless are functionally relevant...
     "FBT",     # Don't care about booleans as positional arguments in tests, e.g. via @pytest.mark.parametrize()

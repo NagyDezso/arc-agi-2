@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.backends.docker_runner import DockerRunner
-from src.models import AgentRunSpec
+from src.models import AgentConfig
 
 
 @pytest.mark.asyncio
@@ -23,8 +23,8 @@ async def test_docker_run_agent_failure():
         runner.setup(root_path, cli_type="opencode")
 
         # Run agent with an invalid model to trigger an API failure inside the container
-        result = await runner.run_agent(
-            spec=AgentRunSpec(
+        result = await runner.start_agent_backend(
+            config=AgentConfig(
                 task_id="test_docker_fail",
                 agent_id="agent_docker_fail",
                 test_index=0,
@@ -42,16 +42,13 @@ async def test_docker_run_agent_failure():
 
         # Depending on how the error is surfaced, it should be in stderr or error.
         # But the orchestrator process itself must NOT crash.
-        assert type(result) is dict
-        assert "task_id" in result
+        assert result.task_id == "test_docker_fail"
 
-        has_error_field = bool(result.get("error"))
-        has_stderr = bool(result.get("stderr"))
-        has_error_in_lines = any("error" in str(line).lower() for line in result.get("raw_lines", []))
-
-        assert has_error_field or has_stderr or has_error_in_lines, (
-            f"Expected the run to capture an error state, but it didn't. Result: {result}"
-        )
+        assert (
+            result.error is not None
+            or result.stderr != ""
+            or any("error" in str(line).lower() for line in result.raw_lines)
+        ), f"Expected the run to capture an error state, but it didn't. Result: {result}"
 
         # Assert attempts is likely empty since it failed
-        assert len(result.get("attempts", [])) == 0
+        assert len(result.attempts) == 0

@@ -1,7 +1,9 @@
-import pytest
+import json
 import tempfile
 from pathlib import Path
-import json
+from unittest.mock import MagicMock
+
+import pytest
 
 
 @pytest.fixture
@@ -23,3 +25,15 @@ def mock_raw_task_file(temp_workspace, mock_task_data):
     task_file = temp_workspace / "task.json"
     task_file.write_text(json.dumps(mock_task_data))
     return task_file
+
+
+@pytest.fixture
+def mock_cli_impl():
+    """Create a MagicMock configured for CLI implementation."""
+    mock = MagicMock()
+    mock.workspace_extras.return_value = None
+    mock.calculate_cost.return_value = 0.0
+    mock.run_session.return_value = ([], 0, "", {})
+    mock.extract_grid_from_output.return_value = None
+    mock.write_readable_log.side_effect = lambda rf, obj: rf.write(f"Parsed readable: {obj}\n")
+    return mock

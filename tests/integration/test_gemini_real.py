@@ -20,39 +20,14 @@ def test_gemini_real_tool_usage():
         )
 
         # Run the session
-        raw_lines, turns, stderr, stats, session_started = cli.run_session(
-            ws_path=ws_path,
-            model=model,
-            initial_prompt=prompt,
-            feedback="",
-            iteration=0,
-            session_started=False,
-            task_id="test_gemini_int",
-            test_index=0,
+        raw_lines, _, _, _ = cli.run_session(
+            ws_path=ws_path, model=model, initial_prompt=prompt, feedback="", iteration=0
         )
-        # Pytest logging of session output
-        print("\n[Gemini Session Output]")
-        print("raw_lines:")
-        for line in raw_lines:
-            print(line)
-        print(f"turns: {turns}")
-        print(f"stderr: {stderr}")
-        print(f"stats: {stats}")
-        print(f"session_started: {session_started}")
-
         # Basic assertions that gemini ran
         assert len(raw_lines) > 0
 
-        # Verify tool calls occurred by parsing
-        parsed = cli.parse_stream_json(raw_lines, "test_gemini_int")
-
-        tool_used = False
-        for entry in parsed:
-            if entry.get("type") == "assistant":
-                for block in entry.get("content", []):
-                    if block.get("type") == "tool_use":
-                        tool_used = True
-                        break
+        # Verify tool calls occurred in the raw stream
+        tool_used = any('"type": "tool_use"' in line or '"type":"tool_use"' in line for line in raw_lines)
 
         assert tool_used is True, "Gemini did not attempt any tool uses."
 

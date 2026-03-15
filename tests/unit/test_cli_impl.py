@@ -1,3 +1,4 @@
+import io
 import json
 
 from src.cli_impl.gemini import GeminiCLI
@@ -58,80 +59,18 @@ def test_opencode_extract_grid_from_output():
     assert grid == [[0, 1], [1, 0]]
 
 
-def test_gemini_parse_stream_json():
+def test_gemini_write_readable_log_handles_split_deltas():
     cli = GeminiCLI()
-    raw_lines = [
-        json.dumps(
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": "Let me solve this",
-                "delta": False,
-            }
-        ),
-        json.dumps(
-            {
-                "type": "tool_use",
-                "tool_name": "run_shell_command",
-                "tool_id": "call_123",
-                "parameters": {"command": "ls -l"},
-            }
-        ),
-    ]
-    parsed = cli.parse_stream_json(raw_lines, task_id="task_1")
-    assert len(parsed) == 1
-    assert parsed[0]["type"] == "assistant"
-    assert len(parsed[0]["content"]) == 2
-    assert parsed[0]["content"][0]["type"] == "text"
-    assert parsed[0]["content"][1]["type"] == "tool_use"
-    assert parsed[0]["content"][1]["name"] == "Bash"
-
-
-def test_gemini_parse_stream_json_result_cost():
-    cli = GeminiCLI()
-    raw_lines = [
-        json.dumps({"type": "result", "stats": {"input": 1000, "cached": 100, "output_tokens": 500}}),
-    ]
-    parsed = cli.parse_stream_json(raw_lines, task_id="t1", model="gemini-2.5-flash")
-    assert len(parsed) == 1
-    assert parsed[0]["type"] == "result"
-    assert parsed[0]["cost"] > 0
-    assert parsed[0]["usage"]["input_tokens"] == 1000
-    assert parsed[0]["usage"]["cached_tokens"] == 100
-    assert parsed[0]["usage"]["output_tokens"] == 500
-
-
-def test_gemini_build_transcript_stream_handles_split_deltas():
-    cli = GeminiCLI()
-    stream = cli.build_transcript_stream(task_id="t1", model="gemini-2.5-flash")
-
-    entries = []
-    entries.extend(
-        stream.consume_raw_line(
-            json.dumps({"type": "message", "role": "assistant", "content": "Hello ", "delta": True})
-        )
+    output = io.StringIO()
+    cli.write_readable_log(
+        output,
+        {"type": "message", "role": "assistant", "content": "Hello ", "delta": True},
     )
-    entries.extend(
-        stream.consume_raw_line(json.dumps({"type": "message", "role": "assistant", "content": "world", "delta": True}))
+    cli.write_readable_log(
+        output,
+        {"type": "message", "role": "assistant", "content": "world", "delta": True},
     )
-    entries.extend(
-        stream.consume_raw_line(
-            json.dumps(
-                {
-                    "type": "tool_use",
-                    "tool_name": "run_shell_command",
-                    "tool_id": "call_123",
-                    "parameters": {"command": "ls -l"},
-                }
-            )
-        )
-    )
-    entries.extend(stream.finalize())
-
-    assert len(entries) == 1
-    assert entries[0]["type"] == "assistant"
-    assert entries[0]["content"][0] == {"type": "text", "text": "Hello world"}
-    assert entries[0]["content"][1]["type"] == "tool_use"
+    assert output.getvalue() == "Hello world"
 
 
 def test_opencode_calculate_cost():
@@ -147,61 +86,19 @@ def test_opencode_calculate_cost():
     assert cli.calculate_cost("unknown-model", 1000, 0, 500) == 0.0
 
 
-def test_opencode_parse_stream_json():
+def test_opencode_write_readable_log_includes_tool_result():
     cli = OpenCodeCLI()
-    raw_lines = [
-        json.dumps({"type": "text", "part": {"text": "Running task"}}),
-        json.dumps(
-            {
-                "type": "tool_use",
-                "part": {
-                    "tool": "bash",
-                    "callID": "call_abc",
-                    "state": {"input": {"command": "echo test"}, "output": "test\\n"},
-                },
-            }
-        ),
-    ]
-    parsed = cli.parse_stream_json(raw_lines, task_id="task_1")
-    # OpenCode parsing flushes assistant blocks when tool_result equivalent output is found
-    # Tool output > 10 chars will trigger user block flush. Since "test\\n" is 5 chars, it just stays in current block until the end
-    assert len(parsed) > 0
-    assert parsed[0]["type"] == "assistant"
-
-
-def test_opencode_build_transcript_stream_accumulates_result_until_finalize():
-    cli = OpenCodeCLI()
-    stream = cli.build_transcript_stream(task_id="task_1", model="kilo/minimax/minimax-m2.5:free")
-
-    entries = []
-    entries.extend(stream.consume_raw_line(json.dumps({"type": "text", "part": {"text": "Running task"}})))
-    entries.extend(
-        stream.consume_raw_line(
-            json.dumps(
-                {
-                    "type": "tool_use",
-                    "part": {
-                        "tool": "bash",
-                        "callID": "call_abc",
-                        "state": {"input": {"command": "echo test"}, "output": ""},
-                    },
-                }
-            )
-        )
+    output = io.StringIO()
+    cli.write_readable_log(
+        output,
+        {
+            "type": "tool_use",
+            "part": {
+                "tool": "bash",
+                "state": {"input": {"command": "echo test"}, "output": "test output"},
+            },
+        },
     )
-    entries.extend(
-        stream.consume_raw_line(
-            json.dumps(
-                {
-                    "type": "step_finish",
-                    "part": {"tokens": {"input": 10, "output": 5, "cache": {"read": 2}}},
-                }
-            )
-        )
-    )
-    entries.extend(stream.finalize())
-
-    assert entries[0]["type"] == "assistant"
-    assert entries[1]["type"] == "result"
-    assert entries[1]["usage"]["input_tokens"] == 10
-    assert entries[1]["usage"]["cached_tokens"] == 2
+    rendered = output.getvalue()
+    assert "**Tool: bash**" in rendered
+    assert "**Tool Result:**" in rendered

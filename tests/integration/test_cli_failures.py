@@ -11,15 +11,12 @@ def test_opencode_bad_model_failure():
         cli = OpenCodeCLI()
 
         # Pass a model that definitely does not exist
-        raw_lines, turns, stderr, stats, session_started = cli.run_session(
+        raw_lines, turns, stderr, _ = cli.run_session(
             ws_path=ws_path,
             model="invalid-model/does-not-exist-12345",
             initial_prompt="Hello, world!",
             feedback="",
             iteration=0,
-            session_started=False,
-            task_id="test_fail",
-            test_index=0,
         )
 
         # We expect stderr to contain some kind of failure or raw_lines to be empty/error
@@ -48,15 +45,8 @@ def test_gemini_bad_model_failure():
         # Needs settings initialized
         cli.workspace_extras(ws_path)
 
-        raw_lines, turns, stderr, stats, session_started = cli.run_session(
-            ws_path=ws_path,
-            model="gemini-invalid-model-name",
-            initial_prompt="Hello, world!",
-            feedback="",
-            iteration=0,
-            session_started=False,
-            task_id="test_fail",
-            test_index=0,
+        raw_lines, turns, stderr, _ = cli.run_session(
+            ws_path=ws_path, model="gemini-invalid-model-name", initial_prompt="Hello, world!", feedback="", iteration=0
         )
 
         assert type(raw_lines) is list

@@ -20,11 +20,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from src.orchestrator import TRANSCRIPT_FILENAME
 
 Grid = list[list[int]]
 
@@ -398,20 +399,20 @@ def write_cost_breakdown_file(cost_breakdown: dict, output_dir: Path) -> None:
 # ── Transcript security check ────────────────────────────────────────────
 
 
-_SUSPICIOUS_PATTERNS = [
-    # API key env var names
+_SUSPICIOUS_STRINGS = [
+    # API key env var names, network access
     r"GEMINI_API_KEY",
     r"GOOGLE_API_KEY",
     r"KILO_API_KEY",
     r"GITHUB_TOKEN",
+    r"https://",
+    r"http://",
     # Env inspection
     r"printenv",
     r"os\.environ",
     r"/proc/self/environ",
     r"/proc/\d+/environ",
 ]
-
-_COMPILED_PATTERNS = [re.compile(p) for p in _SUSPICIOUS_PATTERNS]
 
 
 def check_transcripts(results_dir: Path) -> list[str]:
@@ -425,14 +426,13 @@ def check_transcripts(results_dir: Path) -> list[str]:
     if not logs_dir.is_dir():
         return warnings
 
-    for transcript_file in sorted(logs_dir.rglob("transcript.jsonl")):
+    for transcript_file in sorted(logs_dir.rglob(TRANSCRIPT_FILENAME)):
         rel = transcript_file.relative_to(results_dir)
-        for line_num, line in enumerate(transcript_file.read_text().splitlines(), 1):
-            for pattern in _COMPILED_PATTERNS:
-                match = pattern.search(line)
-                if match:
-                    warnings.append(f"[{rel}] {rel}:{line_num}: found '{match.group()}'")
-
+        lines = transcript_file.read_text()
+        for string in _SUSPICIOUS_STRINGS:
+            if (index := lines.find(string)) != -1:
+                warnings.append(f'[{rel}] suspicious string "{string}" found at index {index}')
+                break
     return warnings
 
 

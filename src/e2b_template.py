@@ -49,6 +49,7 @@ def define_template() -> Template:
                 "pillow",
                 "sympy",
                 "networkx",
+                "pydantic",
             ]
         )
         .run_cmd("mkdir -p /workspace && mkdir -p /app", user="root")

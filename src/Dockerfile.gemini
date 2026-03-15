@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir \
     scikit-image \
     pillow \
     sympy \
-    networkx
+    networkx \
+    pydantic
 
 RUN mkdir -p /workspace /app
 

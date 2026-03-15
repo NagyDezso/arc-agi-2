@@ -1,14 +1,15 @@
 import contextlib
 import json
+import os
 import queue
 import re
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
-from .base import CLIImpl, TranscriptStreamParser
+from .base import BaseCLI, capture_raw_output_line, find_last_grid
 
 SOLVER_MD = """\
 # ARC-AGI Puzzle Solver
@@ -48,150 +49,7 @@ _TOOL_NAME_MAP = {
 }
 
 
-class _GeminiTranscriptStream(TranscriptStreamParser):
-    def __init__(self, cli: "GeminiCLI", model: str | None = None):
-        self._cli = cli
-        self._model = model
-        self._turn_counter = 0
-        self._current_blocks: list[dict[str, Any]] = []
-        self._pending_text = ""
-
-    def _flush_text(self) -> None:
-        if self._pending_text.strip():
-            self._current_blocks.append({"type": "text", "text": self._pending_text.strip()})
-        self._pending_text = ""
-
-    def _flush_assistant(self, out: list[dict[str, Any]]) -> None:
-        if self._current_blocks:
-            self._turn_counter += 1
-            out.append(
-                {
-                    "type": "assistant",
-                    "turn": self._turn_counter,
-                    "content": self._current_blocks,
-                }
-            )
-            self._current_blocks = []
-
-    def consume_raw_line(self, raw_line: str) -> list[dict]:
-        out: list[dict] = []
-        line = raw_line.strip()
-        if not line:
-            return out
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            return out
-
-        evt_type = obj.get("type", "")
-
-        if evt_type == "message":
-            role = obj.get("role", "")
-            content = obj.get("content", "")
-            is_delta = obj.get("delta", False)
-            if role == "assistant":
-                if is_delta:
-                    self._pending_text += content
-                else:
-                    self._flush_text()
-                    if content.strip():
-                        self._current_blocks.append({"type": "text", "text": content.strip()})
-
-        elif evt_type == "tool_use":
-            self._flush_text()
-            gemini_name = obj.get("tool_name", "")
-            tool_id = obj.get("tool_id", "")
-            params = obj.get("parameters", {})
-
-            viewer_name = _TOOL_NAME_MAP.get(gemini_name, gemini_name)
-            viewer_params = self._cli._map_tool_params(gemini_name, params)
-
-            if gemini_name == "run_shell_command" and "submit.py" in params.get("command", ""):
-                cmd = params.get("command", "")
-                grid = self._cli._extract_grid_from_submit_cmd(cmd)
-                if grid is not None:
-                    self._current_blocks.append(
-                        {
-                            "type": "tool_use",
-                            "name": "submit",
-                            "id": tool_id,
-                            "input": {"output": grid, "test_index": 0},
-                        }
-                    )
-                else:
-                    self._current_blocks.append(
-                        {
-                            "type": "tool_use",
-                            "name": viewer_name,
-                            "id": tool_id,
-                            "input": viewer_params,
-                        }
-                    )
-            else:
-                self._current_blocks.append(
-                    {
-                        "type": "tool_use",
-                        "name": viewer_name,
-                        "id": tool_id,
-                        "input": viewer_params,
-                    }
-                )
-
-        elif evt_type == "tool_result":
-            self._flush_text()
-            self._flush_assistant(out)
-            tool_id = obj.get("tool_id", "")
-            status = obj.get("status", "")
-            output = obj.get("output", "")
-            is_error = status == "error"
-            if isinstance(output, str) and len(output) > 5000:
-                output = output[:5000] + "\n... (truncated)"
-            out.append(
-                {
-                    "type": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": output,
-                            **({"is_error": True} if is_error else {}),
-                        }
-                    ],
-                }
-            )
-
-        elif evt_type == "result":
-            self._flush_text()
-            self._flush_assistant(out)
-            stats = obj.get("stats", {})
-            inp = stats.get("input", 0)
-            cached = stats.get("cached", 0)
-            output_tokens = stats.get("output_tokens", 0)
-            cost = self._cli.calculate_cost(self._model, inp, cached, output_tokens) if self._model else 0.0
-            out.append(
-                {
-                    "type": "result",
-                    "cost": cost,
-                    "num_turns": self._turn_counter,
-                    "usage": {
-                        "input_tokens": inp,
-                        "output_tokens": output_tokens,
-                        "total_tokens": stats.get("total_tokens", 0),
-                        "cached_tokens": cached,
-                    },
-                }
-            )
-
-        return out
-
-    def finalize(self) -> list[dict]:
-        out: list[dict] = []
-        self._flush_text()
-        self._flush_assistant(out)
-        return out
-
-
-class GeminiCLI(CLIImpl):
+class GeminiCLI(BaseCLI):
     def workspace_extras(self, ws_path: Path):
         gemini_dir = ws_path / ".gemini"
         gemini_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +75,25 @@ class GeminiCLI(CLIImpl):
             },
             indent=2,
         )
+        # Gemini OAuth initialization
+        gemini_access_token = os.environ.get("GEMINI_OAUTH_ACCESS_TOKEN")
+        if gemini_access_token:
+            (gemini_dir / "oauth_creds.json").write_text(
+                json.dumps(
+                    {
+                        "access_token": gemini_access_token,
+                        "refresh_token": os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN"),
+                        "scope": (
+                            "https://www.googleapis.com/auth/userinfo.email openid "
+                            "https://www.googleapis.com/auth/userinfo.profile "
+                            "https://www.googleapis.com/auth/cloud-platform"
+                        ),
+                        "token_type": "Bearer",
+                        "id_token": os.environ.get("GEMINI_OAUTH_ID_TOKEN"),
+                        "expiry_date": 1772303384460,
+                    }
+                )
+            )
         (gemini_dir / "settings.json").write_text(settings)
 
     def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
@@ -231,17 +108,8 @@ class GeminiCLI(CLIImpl):
         )
 
     def run_session(
-        self,
-        ws_path: Path,
-        model: str,
-        initial_prompt: str,
-        feedback: str,
-        iteration: int,
-        session_started: bool,
-        task_id: str,
-        test_index: int,
-        raw_line_cb: Any | None = None,
-    ) -> tuple[list[str], int, str, dict, bool]:
+        self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
+    ) -> tuple[list[str], int, str, dict]:
         cmd = ["gemini", "-y", "-m", model, "-o", "stream-json"]
         if iteration == 0:
             cmd.extend(["-p", initial_prompt])
@@ -288,15 +156,8 @@ class GeminiCLI(CLIImpl):
 
         def _parse_event(line_str):
             nonlocal num_turns, token_stats
-            line_str = line_str.rstrip("\n").rstrip("\r")
-            if not line_str:
-                return
-            raw_lines.append(line_str)
-            if raw_line_cb is not None:
-                raw_line_cb(line_str)
-            try:
-                obj = json.loads(line_str)
-            except json.JSONDecodeError:
+            obj = capture_raw_output_line(raw_lines, line_str)
+            if obj is None:
                 return
             evt_type = obj.get("type")
             if evt_type == "tool_use":
@@ -344,9 +205,9 @@ class GeminiCLI(CLIImpl):
         reader_thread.join(timeout=5)
 
         if num_turns == 0 and token_stats["input_tokens"] == 0:
-            return raw_lines, num_turns, stderr_text, token_stats, session_started
+            return raw_lines, num_turns, stderr_text, token_stats
 
-        return raw_lines, num_turns, stderr_text, token_stats, True
+        return raw_lines, num_turns, stderr_text, token_stats
 
     def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         write_file_text = ""
@@ -372,42 +233,10 @@ class GeminiCLI(CLIImpl):
                 if isinstance(output, str):
                     tool_result_text += output + "\n"
 
-        grid = self._find_last_grid(write_file_text)
+        grid = find_last_grid(write_file_text)
         if grid is not None:
             return grid
-        return self._find_last_grid(tool_result_text)
-
-    def _find_last_grid(self, text: str) -> list[list[int]] | None:
-        if not text:
-            return None
-        grids = []
-        i = 0
-        while i < len(text):
-            if text[i] == "[" and i + 1 < len(text) and text[i + 1] in "[ \n\r\t":
-                depth = 0
-                j = i
-                while j < len(text):
-                    if text[j] == "[":
-                        depth += 1
-                    elif text[j] == "]":
-                        depth -= 1
-                        if depth == 0:
-                            candidate = text[i : j + 1]
-                            try:
-                                parsed = json.loads(candidate)
-                                if (
-                                    isinstance(parsed, list)
-                                    and len(parsed) > 0
-                                    and all(isinstance(row, list) for row in parsed)
-                                    and all(isinstance(v, int) and 0 <= v <= 9 for row in parsed for v in row)
-                                ):
-                                    grids.append(parsed)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                            break
-                    j += 1
-            i += 1
-        return grids[-1] if grids else None
+        return find_last_grid(tool_result_text)
 
     def _map_tool_params(self, gemini_name: str, params: dict[str, Any]) -> dict[str, Any]:
         if gemini_name == "run_shell_command":
@@ -451,18 +280,7 @@ class GeminiCLI(CLIImpl):
                 pass
         return None
 
-    def parse_stream_json(self, raw_lines: list[str], task_id: str, model: str | None = None) -> list[dict]:
-        stream = self.build_transcript_stream(task_id, model=model)
-        entries: list[dict] = []
-        for line in raw_lines:
-            entries.extend(stream.consume_raw_line(line))
-        entries.extend(stream.finalize())
-        return entries
-
-    def build_transcript_stream(self, task_id: str, model: str | None = None) -> TranscriptStreamParser:
-        return _GeminiTranscriptStream(self, model=model)
-
-    def write_readable_log(self, rf: Any, line: str, obj: dict[str, Any]):
+    def write_readable_log(self, rf: TextIO, obj: dict[str, Any]):
         evt_type = obj.get("type", "")
         if evt_type == "message" and obj.get("role") == "assistant":
             content = obj.get("content", "")

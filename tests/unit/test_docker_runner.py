@@ -1,9 +1,8 @@
 import io
-import json
 import logging
 
 from src.backends.docker_runner import DockerRunner
-from src.log_protocol import encode_status_event, encode_transcript_event
+from src.cli_impl import Event, EventType
 
 
 def test_docker_runner_routes_status_and_transcript_lines(caplog):
@@ -13,18 +12,19 @@ def test_docker_runner_routes_status_and_transcript_lines(caplog):
 
     with caplog.at_level(logging.INFO):
         runner._route_agent_output_line(
-            encode_status_event("agent started", level="info"),
+            Event(type=EventType.STATUS, message="agent started", level="info").model_dump_json(),
             session_file,
             transcript_file,
         )
         runner._route_agent_output_line(
-            encode_transcript_event({"type": "assistant", "turn": 1, "content": []}),
+            Event(type=EventType.TRANSCRIPT, message='{"type":"tool_use","tool_name":"bash"}').model_dump_json(),
             session_file,
             transcript_file,
         )
         runner._route_agent_output_line("plain fallback line", session_file, transcript_file)
 
-    assert session_file.getvalue() == "agent started\nplain fallback line\n"
-    assert json.loads(transcript_file.getvalue()) == {"type": "assistant", "turn": 1, "content": []}
+    assert "agent started" in session_file.getvalue()
+    assert "Unknown event: plain fallback line" in session_file.getvalue()
+    assert transcript_file.getvalue() == '{"type":"tool_use","tool_name":"bash"}\n'
     assert "agent started" in caplog.text
-    assert "plain fallback line" in caplog.text
+    assert "Unknown event: plain fallback line" in caplog.text
