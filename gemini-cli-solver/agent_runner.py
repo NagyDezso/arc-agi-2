@@ -266,6 +266,7 @@ def prepare_workspace(
         "model": {
             "maxSessionTurns": 500,
             "disableLoopDetection": True,
+            "compressionThreshold": 0.2,
         },
         "shell": {
             "inactivityTimeout": 1800,
