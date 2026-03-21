@@ -7,7 +7,7 @@ For each task and each test index:
   - attempt_1 = most common grid (rank 1)
   - attempt_2 = second most common grid (rank 2), or [[0]] fallback
 
-Writes submission.json and cost_breakdown.json to project root,
+Writes submission.json and usage.json to project root,
 and scores against ground truth.
 
 Usage:
@@ -177,13 +177,20 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
         api_cost = 0.0
         e2b_cost = 0.0
         total_cost = 0.0
-        usage: dict[str, int] = {}
+        usage = {
+            "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+            "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+        }
         for agent_info in agents.values():
             api_cost += agent_info.get("cost", 0)
             e2b_cost += agent_info.get("e2b_cost", 0)
             total_cost += agent_info.get("total_cost", 0)
-            for k, v in agent_info.get("usage", {}).items():
-                usage[k] = usage.get(k, 0) + (v if isinstance(v, int) else 0)
+            for tier in ("under_200k", "over_200k"):
+                bd = agent_info.get("usage", {}).get(tier, {})
+                usage[tier]["input"] += bd.get("input", 0)
+                usage[tier]["cached"] += bd.get("cached", 0)
+                usage[tier]["output"] += bd.get("output", 0)
+                usage[tier]["cost"] += bd.get("cost", 0)
         out[task_id] = {
             "api_cost": api_cost,
             "e2b_cost": e2b_cost,
@@ -193,7 +200,7 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
     return out
 
 
-def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
+def extract_usage(results_dir: Path, num_tasks: int) -> dict:
     """Extract cost breakdown from the Gemini CLI solver.
 
     Falls back to aggregating from task_results/*.json when summary.json
@@ -228,15 +235,16 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
         total = api_cost + e2b_cost
 
         total_usage = {
-            "input_tokens": 0,
-            "cached_tokens": 0,
-            "output_tokens": 0,
+            "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+            "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
         }
         for task in tasks.values():
-            usage = task.get("usage", {})
-            total_usage["input_tokens"] += usage.get("input_tokens", 0)
-            total_usage["cached_tokens"] += usage.get("cached_tokens", 0)
-            total_usage["output_tokens"] += usage.get("output_tokens", 0)
+            for tier in ("under_200k", "over_200k"):
+                bd = task.get("usage", {}).get(tier, {})
+                total_usage[tier]["input"] += bd.get("input", 0)
+                total_usage[tier]["cached"] += bd.get("cached", 0)
+                total_usage[tier]["output"] += bd.get("output", 0)
+                total_usage[tier]["cost"] += bd.get("cost", 0)
 
         breakdown["gemini_cli"] = {
             "model": summary.get("model", "unknown"),
@@ -250,7 +258,7 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                     "e2b_cost": round(task.get("e2b_cost", 0.0), 4),
                     "total_cost": round(task.get("total_cost", 0.0), 4),
                     "elapsed_seconds": round(task.get("elapsed", 0.0), 2),
-                    "usage": task.get("usage", {})
+                    "usage": task.get("usage", {}),
                 }
                 for task_id, task in tasks.items()
             }
@@ -262,10 +270,17 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
             api_cost = sum(t["api_cost"] for t in task_costs.values())
             e2b_cost = sum(t["e2b_cost"] for t in task_costs.values())
             total = api_cost + e2b_cost
-            total_usage: dict[str, int] = {}
+            total_usage = {
+                "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+                "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+            }
             for t in task_costs.values():
-                for k, v in t["usage"].items():
-                    total_usage[k] = total_usage.get(k, 0) + v
+                for tier in ("under_200k", "over_200k"):
+                    bd = t.get("usage", {}).get(tier, {})
+                    total_usage[tier]["input"] += bd.get("input", 0)
+                    total_usage[tier]["cached"] += bd.get("cached", 0)
+                    total_usage[tier]["output"] += bd.get("output", 0)
+                    total_usage[tier]["cost"] += bd.get("cost", 0)
             breakdown["gemini_cli"] = {
                 "model": "unknown (from task_results)",
                 "gemini_api_cost": round(api_cost, 4),
@@ -277,7 +292,7 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                         "gemini_api_cost": round(t["api_cost"], 4),
                         "e2b_cost": round(t["e2b_cost"], 4),
                         "total_cost": round(t["total_cost"], 4),
-                        "usage": t["usage"],
+                        "usage": t.get("usage", {}),
                     }
                     for task_id, t in task_costs.items()
                 }
@@ -288,30 +303,34 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                 "gemini_api_cost": 0.0,
                 "e2b_cost": 0.0,
                 "total_cost": 0.0,
-                "usage": {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0},
+                "usage": {},
                 "per_task": {}
             }
 
     return breakdown
 
 
-def print_cost_report(cost_breakdown: dict) -> None:
+def print_cost_report(usage: dict) -> None:
     """Print human-readable cost breakdown to console."""
     print(f"\n{'='*60}")
     print("COST BREAKDOWN")
     print(f"{'='*60}")
 
-    g = cost_breakdown["gemini_cli"]
-    g_usage = g.get("usage", {})
+    g = usage["gemini_cli"]
+    u = g.get("usage", {})
     print(f"\nGemini CLI Solver:")
     print(f"  Model:         {g['model']}")
+    lo = u.get("under_200k", {})
+    hi = u.get("over_200k", {})
+    if lo.get("input", 0) or lo.get("cached", 0) or lo.get("output", 0):
+        print(f"  <=200K ctx:    input={lo.get('input', 0):,}  cached={lo.get('cached', 0):,}  "
+              f"output={lo.get('output', 0):,}  cost=${lo.get('cost', 0):.4f}")
+    if hi.get("input", 0) or hi.get("cached", 0) or hi.get("output", 0):
+        print(f"  >200K ctx:     input={hi.get('input', 0):,}  cached={hi.get('cached', 0):,}  "
+              f"output={hi.get('output', 0):,}  cost=${hi.get('cost', 0):.4f}")
     print(f"  Gemini API:    ${g['gemini_api_cost']:.4f}")
     print(f"  E2B Infra:     ${g['e2b_cost']:.4f}")
     print(f"  TOTAL:         ${g['total_cost']:.4f}")
-    if g_usage:
-        print(f"  Tokens:        input={g_usage.get('input_tokens', 0):,}, "
-              f"cached={g_usage.get('cached_tokens', 0):,}, "
-              f"output={g_usage.get('output_tokens', 0):,}")
     print(f"{'='*60}")
 
 
@@ -439,9 +458,9 @@ def main() -> None:
     # Cost breakdown
     print(f"\n{'='*60}")
     print("Extracting cost breakdown...")
-    cost_breakdown = extract_cost_breakdown(results_dir, num_tasks=len(ground_truth))
-    print_cost_report(cost_breakdown)
-    write_cost_breakdown_file(cost_breakdown, script_dir)
+    usage = extract_usage(results_dir, num_tasks=len(ground_truth))
+    print_cost_report(usage)
+    write_cost_breakdown_file(usage, script_dir)
 
     # Security: check transcripts for API key access attempts
     print(f"\n{'='*60}")

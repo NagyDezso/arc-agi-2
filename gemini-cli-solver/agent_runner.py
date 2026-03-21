@@ -82,6 +82,7 @@ def calculate_cost(
     )
 
 
+
 # ── Grid extraction ─────────────────────────────────────────────────────────
 
 def extract_grid_from_output(raw_lines: list[str]) -> list[list[int]] | None:
@@ -392,7 +393,12 @@ def run_agent(config: dict) -> dict:
         _status({"event": "started", "model": model})
 
         initial_prompt = "Read GEMINI.md, then solve the ARC puzzle in task.json."
-        gemini_cmd_base = f"gemini -y -m {model} -o stream-json"
+        telemetry_path = "/workspace/gemini_telemetry.jsonl"
+        gemini_cmd_base = (
+            f"GEMINI_TELEMETRY_ENABLED=true "
+            f"GEMINI_TELEMETRY_OUTFILE={telemetry_path} "
+            f"gemini -y -m {model} -o stream-json"
+        )
 
         # ── Transform loop: validate + retry with --resume ──
         feedback = ""

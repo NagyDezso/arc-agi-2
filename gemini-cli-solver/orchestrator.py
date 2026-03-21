@@ -56,6 +56,97 @@ _EVENT_FORMATTERS: dict[str, Callable[[dict], str]] = {
 }
 
 
+def _parse_telemetry(raw: str) -> list[dict]:
+    """Parse Gemini CLI telemetry file content (pretty-printed JSON objects).
+
+    Returns list of per-API-call token dicts: [{input, cached, output, total}, ...].
+    """
+    calls: list[dict] = []
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(raw):
+        while pos < len(raw) and raw[pos] in ' \t\n\r':
+            pos += 1
+        if pos >= len(raw):
+            break
+        try:
+            record, end_pos = decoder.raw_decode(raw, pos)
+            pos = end_pos
+        except json.JSONDecodeError:
+            pos += 1
+            continue
+        if not isinstance(record, dict):
+            continue
+        attrs = record.get("attributes", {})
+        if not isinstance(attrs, dict):
+            continue
+        if attrs.get("event.name") == "gemini_cli.api_response":
+            calls.append({
+                "input": int(attrs.get("input_token_count", 0)),
+                "cached": int(attrs.get("cached_content_token_count", 0)),
+                "output": int(attrs.get("output_token_count", 0)),
+                "total": int(attrs.get("total_token_count", 0)),
+            })
+    return calls
+
+
+# Tiered pricing per 1M tokens: (input, output, cached) for ≤200K and >200K tiers
+GEMINI_TIERED_PRICING: dict[str, dict[str, tuple[float, float, float]]] = {
+    "gemini-3.1-pro-preview":  {"low": (2.00, 12.00, 0.20), "high": (4.00, 18.00, 0.40)},
+    "gemini-2.5-pro":          {"low": (1.25, 10.00, 0.125), "high": (2.50, 15.00, 0.25)},
+    "gemini-3-flash-preview":  {"low": (0.50,  3.00, 0.05),  "high": (1.00,  4.50, 0.10)},
+    "gemini-2.5-flash":        {"low": (0.30,  2.50, 0.03),  "high": (0.60,  3.75, 0.06)},
+}
+
+CONTEXT_TIER_THRESHOLD = 200_000
+
+
+def _calculate_tiered_cost(model: str, telemetry_calls: list[dict]) -> dict:
+    """Calculate tiered cost from per-API-call telemetry data.
+
+    Returns {"cost": float, "tiers": {"under_200k": {...}, "over_200k": {...}}}.
+    """
+    pricing = GEMINI_TIERED_PRICING.get(model)
+    if not pricing or not telemetry_calls:
+        return {"cost": 0.0, "tiers": {}}
+
+    low_rates = pricing["low"]
+    high_rates = pricing["high"]
+
+    buckets = {
+        "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+        "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+    }
+
+    for call in telemetry_calls:
+        full_prompt = call["input"]  # includes cached
+        non_cached = full_prompt - call["cached"]
+        cached = call["cached"]
+        output = call["output"]
+
+        if full_prompt > CONTEXT_TIER_THRESHOLD:
+            bucket = buckets["over_200k"]
+            input_rate, output_rate, cached_rate = high_rates
+        else:
+            bucket = buckets["under_200k"]
+            input_rate, output_rate, cached_rate = low_rates
+
+        bucket["input"] += non_cached
+        bucket["cached"] += cached
+        bucket["output"] += output
+        bucket["cost"] += (
+            non_cached * input_rate / 1_000_000
+            + cached * cached_rate / 1_000_000
+            + output * output_rate / 1_000_000
+        )
+
+    total_cost = buckets["under_200k"]["cost"] + buckets["over_200k"]["cost"]
+    buckets["under_200k"]["cost"] = round(buckets["under_200k"]["cost"], 6)
+    buckets["over_200k"]["cost"] = round(buckets["over_200k"]["cost"], 6)
+
+    return {"cost": round(total_cost, 6), "tiers": buckets}
+
+
 async def run_agent_in_e2b(
     task_id: str,
     agent_id: str,
@@ -150,6 +241,48 @@ async def run_agent_in_e2b(
         results_content = await sandbox.files.read("/workspace/results.json")
         result = json.loads(results_content)
 
+        # Download telemetry file (per-API-call token counts)
+        try:
+            telemetry_raw = await sandbox.files.read("/workspace/gemini_telemetry.jsonl")
+            result["telemetry_raw"] = telemetry_raw
+            telemetry_calls = _parse_telemetry(telemetry_raw)
+            result["telemetry"] = telemetry_calls
+            # Tiered cost calculation overwrites flat cost from agent_runner
+            tiered = _calculate_tiered_cost(model, telemetry_calls)
+            if tiered["cost"] > 0:
+                result["cost"] = tiered["cost"]
+                result["usage"] = tiered["tiers"]
+        except Exception:
+            result["telemetry_raw"] = ""
+            result["telemetry"] = []
+            if "usage" not in result or "under_200k" not in result.get("usage", {}):
+                result["usage"] = {
+                    "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+                    "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+                }
+
+        # Download session files
+        try:
+            session_list = await sandbox.commands.run(
+                "find ~/.gemini/tmp -name 'session-*.json' -type f 2>/dev/null",
+                user="root",
+            )
+            session_files = []
+            for path in (session_list.stdout or "").strip().split("\n"):
+                if not path.strip():
+                    continue
+                try:
+                    content = await sandbox.files.read(path.strip())
+                    session_files.append({
+                        "filename": os.path.basename(path.strip()),
+                        "data": json.loads(content),
+                    })
+                except Exception:
+                    continue
+            result["session_files"] = session_files
+        except Exception:
+            result["session_files"] = []
+
         # Calculate E2B cost
         sandbox_duration = time.time() - sandbox_start
         e2b_cost = (sandbox_duration / 3600) * E2B_CPU_COUNT * E2B_COST_PER_VCPU_HOUR
@@ -178,6 +311,10 @@ async def run_agent_in_e2b(
             "e2b_duration": sandbox_duration,
             "total_cost": e2b_cost,
             "turns": 0,
+            "usage": {
+                "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+                "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+            },
             "error": f"E2B sandbox error: {e}",
             "raw_lines": [],
             "stderr": "",
@@ -478,6 +615,25 @@ def write_agent_logs(
     if stderr:
         (log_dir / "stderr.log").write_text(stderr)
 
+    # telemetry — raw file from Gemini CLI + parsed per-call summary
+    telemetry_raw = result.get("telemetry_raw", "")
+    if telemetry_raw:
+        (log_dir / "telemetry_raw.jsonl").write_text(telemetry_raw)
+    telemetry = result.get("telemetry", [])
+    if telemetry:
+        (log_dir / "telemetry.jsonl").write_text(
+            "\n".join(json.dumps(c) for c in telemetry) + "\n"
+        )
+
+    # session files (Gemini CLI internal session recordings)
+    session_files = result.get("session_files", [])
+    if session_files:
+        sessions_dir = log_dir / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        for sf in session_files:
+            fname = sf.get("filename", "session.json")
+            (sessions_dir / fname).write_text(json.dumps(sf.get("data", {}), indent=2))
+
     # error.log (if any)
     if "error" in result:
         (log_dir / "error.log").write_text(result["error"])
@@ -672,17 +828,20 @@ async def process_task(
     total_e2b_cost = sum(r.get("e2b_cost", 0) for r in valid_results)  # E2B infrastructure cost
     elapsed = max((r.get("elapsed", 0) for r in valid_results), default=0)
 
-    # Aggregate token usage across all agents
+    # Aggregate tiered usage across all agents
     total_usage = {
-        "input_tokens": 0,
-        "cached_tokens": 0,
-        "output_tokens": 0,
+        "under_200k": {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
+        "over_200k":  {"input": 0, "cached": 0, "output": 0, "cost": 0.0},
     }
     for r in valid_results:
-        usage = r.get("usage", {})
-        total_usage["input_tokens"] += usage.get("input_tokens", 0)
-        total_usage["cached_tokens"] += usage.get("cached_tokens", 0)
-        total_usage["output_tokens"] += usage.get("output_tokens", 0)
+        for tier in ("under_200k", "over_200k"):
+            bd = r.get("usage", {}).get(tier, {})
+            total_usage[tier]["input"] += bd.get("input", 0)
+            total_usage[tier]["cached"] += bd.get("cached", 0)
+            total_usage[tier]["output"] += bd.get("output", 0)
+            total_usage[tier]["cost"] += bd.get("cost", 0)
+    for tier in ("under_200k", "over_200k"):
+        total_usage[tier]["cost"] = round(total_usage[tier]["cost"], 6)
 
     score_data = {
         "submitted": submitted,
