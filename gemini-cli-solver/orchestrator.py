@@ -244,7 +244,6 @@ async def run_agent_in_e2b(
         # Download telemetry file (per-API-call token counts)
         try:
             telemetry_raw = await sandbox.files.read("/workspace/gemini_telemetry.jsonl")
-            result["telemetry_raw"] = telemetry_raw
             telemetry_calls = _parse_telemetry(telemetry_raw)
             result["telemetry"] = telemetry_calls
             # Tiered cost calculation overwrites flat cost from agent_runner
@@ -253,7 +252,6 @@ async def run_agent_in_e2b(
                 result["cost"] = tiered["cost"]
                 result["usage"] = tiered["tiers"]
         except Exception:
-            result["telemetry_raw"] = ""
             result["telemetry"] = []
             if "usage" not in result or "under_200k" not in result.get("usage", {}):
                 result["usage"] = {
@@ -615,10 +613,7 @@ def write_agent_logs(
     if stderr:
         (log_dir / "stderr.log").write_text(stderr)
 
-    # telemetry — raw file from Gemini CLI + parsed per-call summary
-    telemetry_raw = result.get("telemetry_raw", "")
-    if telemetry_raw:
-        (log_dir / "telemetry_raw.jsonl").write_text(telemetry_raw)
+    # telemetry — parsed per-call token summary (raw OTEL file not saved to save disk)
     telemetry = result.get("telemetry", [])
     if telemetry:
         (log_dir / "telemetry.jsonl").write_text(
