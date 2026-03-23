@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -55,6 +56,7 @@ class GeminiCLI(BaseCLI):
         gemini_dir.mkdir(parents=True, exist_ok=True)
         settings = json.dumps(
             {
+                "general": {"enableAutoUpdate": False},
                 "model": {
                     "maxSessionTurns": 500,
                     "disableLoopDetection": True,
@@ -110,7 +112,8 @@ class GeminiCLI(BaseCLI):
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
     ) -> tuple[list[str], int, str, dict]:
-        cmd = ["gemini", "-y", "-m", model, "-o", "stream-json"]
+        base_path = shutil.which("gemini")
+        cmd = [base_path, "-y", "-m", model, "-o", "stream-json"]
         if iteration == 0:
             cmd.extend(["-p", initial_prompt])
             stdin_text = None
@@ -130,7 +133,6 @@ class GeminiCLI(BaseCLI):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            shell=True,
             start_new_session=True,  # isolate process group so we can kill the whole tree
         )
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:

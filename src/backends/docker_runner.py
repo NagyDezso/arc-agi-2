@@ -7,8 +7,9 @@ import tempfile
 import time
 from pathlib import Path
 
+import aiodocker
 import docker
-from docker.errors import DockerException
+from aiodocker.exceptions import DockerError
 
 from src.backends.base import BackendRunner
 from src.models import AgentConfig, AgentResultData, UsageTotals
@@ -18,17 +19,10 @@ logger = logging.getLogger(__name__)
 
 DOCKER_IMAGE = os.environ.get("ARC_SOLVER_DOCKER_IMAGE", "arc-solver:latest")
 DOCKER_CPU_COUNT = int(os.environ.get("ARC_SOLVER_DOCKER_CPUS", "1"))
-DOCKER_MEMORY = os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "1g")
+DOCKER_MEMORY = int(os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "1")) * 1024 * 1024 * 1024
 
 
 class DockerRunner(BackendRunner):
-    _client = None
-
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = docker.from_env()
-        return self._client
 
     def _sanitize_container_name(self, name: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
@@ -38,7 +32,8 @@ class DockerRunner(BackendRunner):
         image_tag = f"arc-solver-{cli_type}:latest"
         logger.info(f"Building Docker image '{image_tag}' ...")
         dockerfile = f"Dockerfile.{cli_type}"
-        self.client.images.build(
+        client = docker.from_env()
+        client.images.build(
             path=str(root_path),
             dockerfile=str(root_path / dockerfile),
             tag=image_tag,
@@ -55,6 +50,8 @@ class DockerRunner(BackendRunner):
         run_root = Path(tempfile.mkdtemp(prefix=f"arc-agent-{config.agent_id[:24]}-"))
         container_name = self._sanitize_container_name(f"arc-agent-{config.agent_id}-{int(time.time())}")
         run_start = time.time()
+        container = None
+        adocker: aiodocker.Docker | None = None
 
         try:
             (run_root / "config.json").write_text(config.model_dump_json(), encoding="utf-8")
@@ -66,7 +63,6 @@ class DockerRunner(BackendRunner):
             shutil.copy(ROOT / "models.py", app / "models.py")
             shutil.copytree(ROOT / "cli_impl", app / "cli_impl")
 
-            container = None
             image_tag = f"arc-solver-{config.cli_type}:latest"
 
             config.log_dir.mkdir(parents=True, exist_ok=True)
@@ -80,37 +76,37 @@ class DockerRunner(BackendRunner):
                 "python3 /app/agent_runner.py"
             )
 
-            create_kwargs = {
-                "image": image_tag,
-                "name": container_name,
-                "command": ["bash", "-lc", command],
-                "detach": True,
-                "working_dir": "/workspace",
-                "volumes": {str(run_root.resolve()): {"bind": "/workspace", "mode": "rw"}},
-                "environment": config.envs,
-                "cpu_count": DOCKER_CPU_COUNT,
-                "mem_limit": DOCKER_MEMORY,
-                "log_config": {"type": "json-file", "config": {}},
+            container_config = {
+                "Image": image_tag,
+                "Cmd": ["bash", "-lc", command],
+                "WorkingDir": "/workspace",
+                "Env": [f"{key}={value}" for key, value in config.envs.items()],
+                "HostConfig": {
+                    "Binds": [f"{run_root.resolve()}:/workspace:rw"],
+                    "CpuCount": DOCKER_CPU_COUNT,
+                    "Memory": DOCKER_MEMORY,
+                    "LogConfig": {"Type": "json-file", "Config": {}},
+                },
             }
 
-            container = self.client.containers.create(**create_kwargs)
-            container.start()
-            output_buffer = ""
-            with session_log_path.open("a", encoding="utf-8") as session_f, transcript_path.open("a", encoding="utf-8") as transcript_f:
-                for chunk in container.logs(stream=True, follow=True):
-                    output_buffer += chunk.decode(errors="replace")
-                    while "\n" in output_buffer:
-                        line, output_buffer = output_buffer.split("\n", 1)
+            adocker = aiodocker.Docker()
+            container = await adocker.containers.create(config=container_config, name=container_name)
+            await container.start()
+            with (
+                session_log_path.open("a", encoding="utf-8") as session_f,
+                transcript_path.open("a", encoding="utf-8") as transcript_f,
+            ):
+                stdout_buffer = ""
+                async for chunk in container.log(stdout=True, stderr=True, follow=True):
+                    stdout_buffer += chunk
+                    while "\n" in stdout_buffer:
+                        line, stdout_buffer = stdout_buffer.split("\n", 1)
                         line = line.rstrip("\r")
                         if not line:
                             continue
-                        self._route_agent_output_line(line, session_f, transcript_f)
+                    self._route_agent_output_line(line, session_f, transcript_f)
 
-                if output_buffer.strip():
-                    final_line = output_buffer.rstrip("\r")
-                    self._route_agent_output_line(final_line, session_f, transcript_f)
-
-            container.wait(timeout=3600)
+            await container.wait(timeout=3600)
             results_path = run_root / "results.json"
             result = AgentResultData.model_validate_json(results_path.read_text())
 
@@ -135,13 +131,14 @@ class DockerRunner(BackendRunner):
                 cost=0.0,
                 turns=0,
                 usage=UsageTotals(input_tokens=0, cached_tokens=0, output_tokens=0),
-                raw_lines=[],
                 stderr=err_msg,
             )
         else:
             return result
         finally:
             if container is not None:
-                with contextlib.suppress(DockerException):
-                    container.remove(force=True)
+                with contextlib.suppress(DockerError):
+                    await container.delete(force=True)
             shutil.rmtree(run_root, ignore_errors=True)
+            if adocker is not None:
+                await adocker.close()

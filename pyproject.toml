@@ -3,7 +3,13 @@ name = "opencode-solver"
 version = "0.1.0"
 description = "OpenCode CLI agent solver for ARC-AGI tasks"
 requires-python = ">=3.11"
-dependencies = ["docker>=7.1.0", "pydantic>=2.0", "python-dotenv", "typer>=0.15.0"]
+dependencies = [
+    "aiodocker>=0.24.0",
+    "docker>=7.1.0",
+    "pydantic>=2.0",
+    "python-dotenv",
+    "typer>=0.15.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

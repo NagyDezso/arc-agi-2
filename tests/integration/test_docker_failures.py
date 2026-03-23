@@ -36,7 +36,6 @@ async def test_docker_run_agent_failure():
                 soft_training_feedback=False,
                 whole_task=False,
                 cli_type="opencode",
-                root_path=root_path,
             ),
         )
 

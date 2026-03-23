@@ -31,8 +31,8 @@ class BackendRunner(Protocol):
     def _route_agent_output_line(self, line: str, session_file: TextIO, transcript_file: TextIO) -> None:
         try:
             event = Event.model_validate_json(line)
-        except ValidationError as e:
-            message = f"Unknown event: {line} - {e}"
+        except ValidationError:
+            message = f"Unknown event: {line}"
             logger.error(message)
             session_file.write(message + "\n")
             session_file.flush()

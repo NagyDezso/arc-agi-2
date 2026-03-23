@@ -212,7 +212,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
             total_cached_tokens += stats["cached_tokens"]
             total_output_tokens += stats["output_tokens"]
             if stderr:
-                _emit_status(config.agent_id, f"error {stderr.strip()}", level="error")
+                _emit_status(config.agent_id, f"Error: {stderr.strip()}", level="error")
                 stderr_text += stderr + "\n"
                 # Check for fatal errors that should stop the agent
                 if any(err in stderr for err in FATAL_ERRORS):

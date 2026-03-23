@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 if TYPE_CHECKING:
     from backends.base import BackendRunner
@@ -79,9 +80,9 @@ class AgentResultData(BaseModel):
     turns: int = 0
     usage: UsageTotals = Field(default_factory=UsageTotals)
     elapsed: float = 0.0
-    error: str | None = None
-    raw_lines: list[str] = Field(default_factory=list)
-    stderr: str = ""
+    error: str | None = Field(default=None, exclude_if=lambda x: x is None)
+    raw_lines: list[str] = Field(default_factory=list, exclude=True)
+    stderr: str = Field(default="", exclude_if=lambda x: x == "")
 
 
 class TaskScore(BaseModel):

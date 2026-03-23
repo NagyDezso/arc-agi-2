@@ -42,12 +42,18 @@ async def test_process_task_integration(tmp_path, mock_raw_task_file, mock_cli_i
     run_dir.mkdir()
 
     args = CliArgs(
+        tasks="test_task_id",
         num_agents=1,
+        name="test-name",
+        resume=None,
         model="test-model",
         max_iterations=2,
         soft_training_feedback=False,
-        cli="opencode",
         whole_task=False,
+        concurrency=1,
+        limit=None,
+        cli="opencode",
+        backend="docker",
     )
 
     backend_impl = MockBackend()

@@ -405,8 +405,6 @@ _SUSPICIOUS_STRINGS = [
     r"GOOGLE_API_KEY",
     r"KILO_API_KEY",
     r"GITHUB_TOKEN",
-    r"https://",
-    r"http://",
     # Env inspection
     r"printenv",
     r"os\.environ",

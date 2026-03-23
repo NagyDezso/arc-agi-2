@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TextIO
@@ -24,9 +25,9 @@ _TOOL_NAME_MAP = {
 }
 
 _IGNORED_STDERR_SUBSTRINGS = (
-    "Performing one time database migration, may take a few minutes",
-    "sqlite-migration:done",
-    "Database migration complete.",
+    "Performing one time database migration, may take a few minutes...\n",
+    "sqlite-migration:done\n",
+    "Database migration complete.\n",
 )
 
 
@@ -47,6 +48,30 @@ class OpenCodeCLI(BaseCLI):
                 },
                 auth_file,
             )
+        config = {
+            "$schema": "https://opencode.ai/config.json",
+            "agent": {
+                "build": {
+                    "steps": 500,
+                },
+                "general": {
+                    "steps": 200,
+                },
+            },
+            "provider": {
+                "ollama": {
+                    "models": {
+                        "qwen3.5:2b": {"name": "qwen3.5:2b"},
+                        "qwen3.5:0.8b": {"name": "qwen3.5:0.8b"},
+                    },
+                    "name": "Ollama (local)",
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {"baseURL": "host.docker.internal:4444/v1"},
+                }
+            },
+        }
+        config_path = ws_path / "opencode.json"
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
         pricing = OPENCODE_PRICING.get(model)
@@ -62,8 +87,9 @@ class OpenCodeCLI(BaseCLI):
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
     ) -> tuple[list[str], int, str, dict]:
-
-        cmd = ["opencode", "run", "--format", "json"]
+        # Resolve the opencode executable path not the same on Windows and Unix
+        base_path = shutil.which("opencode")
+        cmd = [base_path, "run", "--format", "json"]
         if iteration == 0:
             cmd.extend(
                 [

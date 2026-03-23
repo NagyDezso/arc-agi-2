@@ -99,7 +99,7 @@ def write_agent_logs(
 
     attempts_path = log_dir / "attempts.jsonl"
     attempts_path.write_text(
-        "".join(f"{attempt.model_dump_json()}\n" for attempt in result.attempts),
+        "".join(f"{json.dumps(attempt.model_dump(), separators=(', ', ': '))}\n" for attempt in result.attempts),
         encoding="utf-8",
         errors="replace",
     )
@@ -129,7 +129,7 @@ def write_task_result(
     else:
         results = TaskProcessResult(task_id=task_id)
     results.update_results(agent_data)
-    task_file.write_text(results.model_dump_json(), encoding="utf-8")
+    task_file.write_text(json.dumps(results.model_dump(), separators=(", ", ": ")), encoding="utf-8")
 
 
 def get_envs(cli_type: str) -> dict[str, str]:
@@ -243,7 +243,7 @@ async def process_task(
     task_results_dir = run_dir / "task_results"
     task_results_dir.mkdir(exist_ok=True)
     (task_results_dir / f"{task_id}.json").write_text(
-        result.model_dump_json(),
+        json.dumps(result.model_dump(), separators=(", ", ": ")),
         encoding="utf-8",
     )
     return result
@@ -319,6 +319,12 @@ def _accumulate_existing_scores(
 
 
 async def run_all(args: CliArgs) -> None:
+    task_ids = load_task_ids(args.tasks)
+    run_dir = _resolve_run_dir(args)
+    if run_dir is None:
+        return
+    setup_logging(run_dir)
+
     context = OrchestrationContext(
         backend_impl=get_backend_runner(args.backend),
         cli_impl=get_cli_impl(args.cli),
@@ -329,12 +335,6 @@ async def run_all(args: CliArgs) -> None:
         logger.error(f"Failed to setup {args.backend}: {e}")
         return
 
-    task_ids = load_task_ids(args.tasks)
-    run_dir = _resolve_run_dir(args)
-    if run_dir is None:
-        return
-
-    setup_logging(run_dir)
     logger.info(f"Loaded {len(task_ids)} tasks")
 
     _update_latest_run_link(run_dir)
