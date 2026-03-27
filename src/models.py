@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from backends.base import BackendRunner
@@ -81,8 +80,12 @@ class AgentResultData(BaseModel):
     usage: UsageTotals = Field(default_factory=UsageTotals)
     elapsed: float = 0.0
     error: str | None = Field(default=None, exclude_if=lambda x: x is None)
-    raw_lines: list[str] = Field(default_factory=list, exclude=True)
+    raw_lines: list[str] = Field(default_factory=list)
     stderr: str = Field(default="", exclude_if=lambda x: x == "")
+
+
+# Bulk transcript lines: include in container results.json, omit from host task_results/*.json.
+TASK_RESULT_JSON_EXCLUDE: Final[dict[str, Any]] = {"agents": {"__all__": {"raw_lines"}}}
 
 
 class TaskScore(BaseModel):

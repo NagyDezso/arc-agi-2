@@ -12,41 +12,11 @@ from typing import Any, TextIO
 
 from .base import BaseCLI, capture_raw_output_line, find_last_grid
 
-SOLVER_MD = """\
-# ARC-AGI Puzzle Solver
-
-Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
-Find the transformation pattern and apply it to the test input.
-
-Use `python3` for scripting. All common scientific/mathematical packages are pre-installed — use whatever you need.
-
-Output grids must contain only integers 0-9.
-
-## Approach
-Write `transform.py` with a Python function `transform(grid: np.ndarray) -> np.ndarray`.
-The function takes a 2D numpy integer array and returns a 2D numpy integer array.
-Test against ALL training pairs. Iterate until correct.
-
-When analyzing, consider: object manipulation, color changes, spatial patterns,
-object relationships, grid structure (borders, separators, subgrids).
-"""
-
 GEMINI_PRICING = {
     "gemini-3-flash-preview": (0.50, 3.00, 0.05),
     "gemini-2.5-flash": (0.30, 2.50, 0.03),
     "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),
     "gemini-2.5-pro": (1.25, 10.00, 0.125),
-}
-
-_TOOL_NAME_MAP = {
-    "run_shell_command": "Bash",
-    "read_file": "Read",
-    "write_file": "Write",
-    "write_new_file": "Write",
-    "edit_file": "Edit",
-    "glob": "Glob",
-    "grep": "Grep",
-    "list_directory": "Glob",
 }
 
 
@@ -307,3 +277,7 @@ class GeminiCLI(BaseCLI):
             rf.write(
                 f"---\n**Result:** tokens={stats.get('total_tokens', '?')}, duration={stats.get('duration_ms', '?')}ms, tool_calls={stats.get('tool_calls', '?')}\n"
             )
+        elif evt_type == "harness_feedback":
+            nxt = obj.get("for_iteration", "?")
+            body = obj.get("text", "")
+            rf.write(f"\n\n**Harness feedback** (next session iteration {nxt}):\n```\n{body}\n```\n\n")

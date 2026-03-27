@@ -25,6 +25,7 @@ from src.backends import get_backend_runner
 from src.cli_impl import BaseCLI, get_cli_impl
 from src.logger import setup_logging
 from src.models import (
+    TASK_RESULT_JSON_EXCLUDE,
     AgentConfig,
     AgentResultData,
     CliArgs,
@@ -38,6 +39,7 @@ CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
 RESULTS = ROOT / "results"
 SESSION_LOG_FILENAME = "session.log"
 TRANSCRIPT_FILENAME = "transcript.jsonl"
+ATTEMPTS_LOG_FILENAME = "attempts.jsonl"
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +99,9 @@ def write_agent_logs(
                 continue
             cli_impl.write_readable_log(readable_file, obj)
 
-    attempts_path = log_dir / "attempts.jsonl"
+    attempts_path = log_dir / ATTEMPTS_LOG_FILENAME
     attempts_path.write_text(
-        "".join(f"{json.dumps(attempt.model_dump(), separators=(', ', ': '))}\n" for attempt in result.attempts),
+        "".join(f"{json.dumps(attempt.model_dump())}\n" for attempt in result.attempts),
         encoding="utf-8",
         errors="replace",
     )
@@ -129,7 +131,10 @@ def write_task_result(
     else:
         results = TaskProcessResult(task_id=task_id)
     results.update_results(agent_data)
-    task_file.write_text(json.dumps(results.model_dump(), separators=(", ", ": ")), encoding="utf-8")
+    task_file.write_text(
+        json.dumps(results.model_dump(exclude=TASK_RESULT_JSON_EXCLUDE)),
+        encoding="utf-8",
+    )
 
 
 def get_envs(cli_type: str) -> dict[str, str]:
@@ -243,7 +248,7 @@ async def process_task(
     task_results_dir = run_dir / "task_results"
     task_results_dir.mkdir(exist_ok=True)
     (task_results_dir / f"{task_id}.json").write_text(
-        json.dumps(result.model_dump(), separators=(", ", ": ")),
+        json.dumps(result.model_dump(exclude=TASK_RESULT_JSON_EXCLUDE)),
         encoding="utf-8",
     )
     return result

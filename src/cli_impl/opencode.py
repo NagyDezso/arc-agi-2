@@ -13,17 +13,6 @@ OPENCODE_PRICING = {
     "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
 }
 
-_TOOL_NAME_MAP = {
-    "bash": "Bash",
-    "read": "Read",
-    "write": "Write",
-    "edit": "Edit",
-    "glob": "Glob",
-    "grep": "Grep",
-    "list": "Glob",
-    "task": "Task",
-}
-
 _IGNORED_STDERR_SUBSTRINGS = (
     "Performing one time database migration, may take a few minutes...\n",
     "sqlite-migration:done\n",
@@ -51,20 +40,37 @@ class OpenCodeCLI(BaseCLI):
         config = {
             "$schema": "https://opencode.ai/config.json",
             "agent": {
-                "build": {
-                    "steps": 500,
-                },
-                "general": {
-                    "steps": 200,
-                },
+                "arc_solver": {
+                    "prompt": "You are participating in a puzzle solving competition. You are an expert at solving puzzles.",
+                    "tools": {
+                        "webfetch": False,
+                        "skill": False,
+                        "task": False,
+                        "todowrite": False,
+                        "question": False,
+                        "grep": False,
+                        "glob": False,
+                        "bash": True,
+                        "read": True,
+                        "write": True,
+                        "edit": True,
+                    },
+                }
             },
             "provider": {
-                "ollama": {
+                "lmstudio": {
                     "models": {
                         "qwen3.5:2b": {"name": "qwen3.5:2b"},
                         "qwen3.5:0.8b": {"name": "qwen3.5:0.8b"},
+                        "qwen3.5:27b": {
+                            "name": "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2",
+                            "limit": {
+                                "context": 400000,
+                                "output": 4096,
+                            },
+                        },
                     },
-                    "name": "Ollama (local)",
+                    "name": "LMStudio (local)",
                     "npm": "@ai-sdk/openai-compatible",
                     "options": {"baseURL": "host.docker.internal:4444/v1"},
                 }
@@ -89,7 +95,7 @@ class OpenCodeCLI(BaseCLI):
     ) -> tuple[list[str], int, str, dict]:
         # Resolve the opencode executable path not the same on Windows and Unix
         base_path = shutil.which("opencode")
-        cmd = [base_path, "run", "--format", "json"]
+        cmd = [base_path, "run", "--format", "json", "--agent", "arc_solver"]
         if iteration == 0:
             cmd.extend(
                 [
@@ -226,3 +232,8 @@ class OpenCodeCLI(BaseCLI):
             rf.write(
                 f"---\n**Step:** tokens={tokens.get('input', 0) + tokens.get('output', 0)}, reason={part.get('reason', '?')}\n"
             )
+        elif evt_type == "harness_feedback":
+            nxt = obj.get("for_iteration", "?")
+            body = obj.get("text", "")
+            hdr = f"\n\n**Harness feedback** (next session iteration {nxt}):\n```\n"
+            rf.write(f"{hdr}{body}\n```\n\n")

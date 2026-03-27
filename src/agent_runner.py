@@ -170,13 +170,19 @@ def prepare_workspace(
             "train": train_examples,
             "test": [{"input": raw_task["test"][test_index]["input"]}],
         }
-    (ws_path / "task.json").write_text(json.dumps(public_task, indent=2))
+    (ws_path / "task.json").write_text(json.dumps(public_task))
     cli_impl.workspace_extras(ws_path)
     return ws_path
 
 
 def _emit_status(agent_id: str, message: str, *, level: str = "info") -> None:
     print(Event(type=EventType.STATUS, message=f"[{agent_id}] {message}", level=level).model_dump_json(), flush=True)
+
+
+def _emit_harness_feedback(all_raw_lines: list[str], for_iteration: int, text: str) -> None:
+    line = json.dumps({"type": "harness_feedback", "for_iteration": for_iteration, "text": text})
+    all_raw_lines.append(line)
+    print(Event(type=EventType.TRANSCRIPT, message=line).model_dump_json(), flush=True)
 
 
 def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
@@ -201,7 +207,8 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
 
         while iteration < config.max_iterations:
             _emit_status(config.agent_id, f"iteration {iteration + 1}/{config.max_iterations}")
-
+            if feedback:
+                _emit_harness_feedback(all_raw_lines, iteration + 1, feedback)
             raw_lines, turns, stderr, stats = cli.run_session(
                 ws_path=ws_path, model=config.model, initial_prompt=INSTRUCTION, feedback=feedback, iteration=iteration
             )
@@ -281,7 +288,6 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
                             )
                             _emit_status(config.agent_id, f"submitted attempt={attempts_used}")
                             break
-
             iteration += 1
 
         if not attempts and not config.whole_task:

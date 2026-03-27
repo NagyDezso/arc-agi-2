@@ -33,7 +33,7 @@ class BackendRunner(Protocol):
             event = Event.model_validate_json(line)
         except ValidationError:
             message = f"Unknown event: {line}"
-            logger.error(message)
+            logger.warning(message)
             session_file.write(message + "\n")
             session_file.flush()
             return

@@ -21,10 +21,21 @@ def test_docker_runner_routes_status_and_transcript_lines(caplog):
             session_file,
             transcript_file,
         )
+        runner._route_agent_output_line(
+            Event(
+                type=EventType.TRANSCRIPT,
+                message='{"type":"harness_feedback","for_iteration":1,"text":"fix it"}',
+            ).model_dump_json(),
+            session_file,
+            transcript_file,
+        )
         runner._route_agent_output_line("plain fallback line", session_file, transcript_file)
 
     assert "agent started" in session_file.getvalue()
     assert "Unknown event: plain fallback line" in session_file.getvalue()
-    assert transcript_file.getvalue() == '{"type":"tool_use","tool_name":"bash"}\n'
+    assert transcript_file.getvalue() == (
+        '{"type":"tool_use","tool_name":"bash"}\n'
+        '{"type":"harness_feedback","for_iteration":1,"text":"fix it"}\n'
+    )
     assert "agent started" in caplog.text
     assert "Unknown event: plain fallback line" in caplog.text
