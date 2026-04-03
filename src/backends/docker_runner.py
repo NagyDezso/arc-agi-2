@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 import os
@@ -56,12 +57,12 @@ class DockerRunner(BackendRunner):
         try:
             (run_root / "config.json").write_text(config.model_dump_json(), encoding="utf-8")
             # Create src package structure for Python imports to work
-            app = run_root / "app"
-            app.mkdir()
-            shutil.copy(ROOT / "__init__.py", app / "__init__.py")
-            shutil.copy(ROOT / "agent_runner.py", app / "agent_runner.py")
-            shutil.copy(ROOT / "models.py", app / "models.py")
-            shutil.copytree(ROOT / "cli_impl", app / "cli_impl")
+            staged_src = run_root / "app" / "src"
+            staged_src.mkdir(parents=True)
+            shutil.copy(ROOT / "__init__.py", staged_src / "__init__.py")
+            shutil.copy(ROOT / "agent_runner.py", staged_src / "agent_runner.py")
+            shutil.copy(ROOT / "models.py", staged_src / "models.py")
+            shutil.copytree(ROOT / "cli_impl", staged_src / "cli_impl")
 
             image_tag = f"arc-solver-{config.cli_type}:latest"
 
@@ -73,7 +74,7 @@ class DockerRunner(BackendRunner):
                 "cp /workspace/config.json /root/config.json && "
                 "cp -r /workspace/app/* /app/ && "
                 "rm -rf /workspace/config.json /workspace/app && "
-                "python3 /app/agent_runner.py"
+                "PYTHONPATH=/app python3 /app/src/agent_runner.py"
             )
 
             container_config = {
@@ -104,7 +105,7 @@ class DockerRunner(BackendRunner):
                         line = line.rstrip("\r")
                         if not line:
                             continue
-                    self._route_agent_output_line(line, session_f, transcript_f)
+                        self._route_agent_output_line(line, session_f, transcript_f)
 
             await container.wait(timeout=3600)
             results_path = run_root / "results.json"
@@ -136,9 +137,15 @@ class DockerRunner(BackendRunner):
         else:
             return result
         finally:
-            if container is not None:
-                with contextlib.suppress(DockerError):
-                    await container.delete(force=True)
-            shutil.rmtree(run_root, ignore_errors=True)
-            if adocker is not None:
-                await adocker.close()
+
+            async def _cleanup_backend() -> None:
+                if container is not None:
+                    with contextlib.suppress(DockerError):
+                        await container.delete(force=True)
+                shutil.rmtree(run_root, ignore_errors=True)
+                if adocker is not None:
+                    await adocker.close()
+
+            # Finish closing aiohttp/Docker pipes even when Ctrl+C cancels the agent task
+            # (avoids "Unclosed connector" / proactor noise on Windows).
+            await asyncio.shield(_cleanup_backend())

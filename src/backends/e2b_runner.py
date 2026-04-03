@@ -65,10 +65,13 @@ class E2BRunner(BackendRunner):
 
         try:
             await sandbox.files.write("/root/config.json", json.dumps(config))
-            await sandbox.files.write("/app/agent_runner.py", (ROOT / "agent_runner.py").read_text())
-            await sandbox.files.make_dir("/app/cli_impl")
+            await sandbox.files.make_dir("/app/src")
+            await sandbox.files.make_dir("/app/src/cli_impl")
+            await sandbox.files.write("/app/src/__init__.py", (ROOT / "__init__.py").read_text())
+            await sandbox.files.write("/app/src/agent_runner.py", (ROOT / "agent_runner.py").read_text())
+            await sandbox.files.write("/app/src/models.py", (ROOT / "models.py").read_text())
             for f in (ROOT / "cli_impl").glob("*.py"):
-                await sandbox.files.write(f"/app/cli_impl/{f.name}", f.read_text())
+                await sandbox.files.write(f"/app/src/cli_impl/{f.name}", f.read_text())
 
             session_f = session_log_path.open("a", encoding="utf-8")
             transcript_f = transcript_path.open("a", encoding="utf-8")
@@ -90,7 +93,7 @@ class E2BRunner(BackendRunner):
 
             try:
                 await sandbox.commands.run(
-                    "python3 /app/agent_runner.py",
+                    "PYTHONPATH=/app python3 /app/src/agent_runner.py",
                     user="root",
                     timeout=43200 + 120,
                     on_stdout=on_stdout,

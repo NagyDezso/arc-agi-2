@@ -42,7 +42,7 @@ def main(
     cli: str = typer.Option(
         "gemini",
         "--cli",
-        help="CLI to use (opencode or gemini, default: gemini)",
+        help="CLI to use: opencode, gemini, or junie (default: gemini)",
     ),
     backend: str = typer.Option(
         "docker",

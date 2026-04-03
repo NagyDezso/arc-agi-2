@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from cli_impl import BaseCLI, Event, EventType, get_cli_impl
-from models import AgentAttempt, AgentConfig, AgentResultData, UsageTotals
+from src.cli_impl import BaseCLI, Event, EventType, get_cli_impl
+from src.models import AgentAttempt, AgentConfig, AgentResultData, UsageTotals
 
 INSTRUCTION = """\
 Read `task.json`. It has `train` (input/output pairs) and `test` (one test input).
@@ -190,9 +190,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
     attempts: list[AgentAttempt] = []
     attempts_used = 0
     total_turns = 0
-    total_input_tokens = 0
-    total_cached_tokens = 0
-    total_output_tokens = 0
+    total_usage = UsageTotals()
     stderr_text = ""
     all_raw_lines: list[str] = []
 
@@ -215,9 +213,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
 
             all_raw_lines.extend(raw_lines)
             total_turns += turns
-            total_input_tokens += stats["input_tokens"]
-            total_cached_tokens += stats["cached_tokens"]
-            total_output_tokens += stats["output_tokens"]
+            total_usage += stats
             if stderr:
                 _emit_status(config.agent_id, f"Error: {stderr.strip()}", level="error")
                 stderr_text += stderr + "\n"
@@ -305,7 +301,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
 
         elapsed = time.time() - start_time
         _emit_status(config.agent_id, f"done elapsed={round(elapsed, 1)}s attempts={attempts_used}")
-        cost = cli.calculate_cost(config.model, total_input_tokens, total_cached_tokens, total_output_tokens)
+        cost = cli.calculate_cost(config.model, total_usage)
         return AgentResultData(
             task_id=config.task_id,
             agent_id=config.agent_id,
@@ -313,9 +309,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
             attempts=attempts,
             cost=cost,
             turns=total_turns,
-            usage=UsageTotals(
-                input_tokens=total_input_tokens, cached_tokens=total_cached_tokens, output_tokens=total_output_tokens
-            ),
+            usage=total_usage,
             elapsed=elapsed,
             raw_lines=all_raw_lines,
             stderr=stderr_text,
@@ -323,7 +317,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
 
     except Exception as error:
         elapsed = time.time() - start_time
-        cost = cli.calculate_cost(config.model, total_input_tokens, total_cached_tokens, total_output_tokens)
+        cost = cli.calculate_cost(config.model, total_usage)
         return AgentResultData(
             task_id=config.task_id,
             agent_id=config.agent_id,
@@ -332,11 +326,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
             elapsed=elapsed,
             cost=cost,
             turns=total_turns,
-            usage=UsageTotals(
-                input_tokens=total_input_tokens,
-                cached_tokens=total_cached_tokens,
-                output_tokens=total_output_tokens,
-            ),
+            usage=total_usage,
             raw_lines=all_raw_lines,
             stderr=stderr_text,
             error=str(error),

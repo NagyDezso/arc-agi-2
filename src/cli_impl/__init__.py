@@ -1,16 +1,19 @@
-"""CLI implementations for open_code and gemini."""
+"""CLI implementations for opencode, gemini, and junie."""
 
 from .base import BaseCLI
+from .gemini import GeminiCLI
+from .junie import JunieCLI
+from .opencode import OpenCodeCLI
 from .types import Event, EventType
 
+CLI_IMPLS = {
+    "opencode": OpenCodeCLI,
+    "gemini": GeminiCLI,
+    "junie": JunieCLI,
+}
 
 def get_cli_impl(cli_name: str) -> BaseCLI:
-    if cli_name == "opencode":
-        from .opencode import OpenCodeCLI
-
-        return OpenCodeCLI()
-    if cli_name == "gemini":
-        from .gemini import GeminiCLI
-
-        return GeminiCLI()
-    raise ValueError(f"Unknown cli name: {cli_name}")
+    try:
+        return CLI_IMPLS[cli_name]()
+    except KeyError:
+        raise ValueError(f"Unknown cli name: {cli_name}")

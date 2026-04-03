@@ -36,7 +36,7 @@ from src.models import (
 
 ROOT = Path(__file__).resolve().parent
 CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
-RESULTS = ROOT / "results"
+RESULTS = ROOT.parent / "results"
 SESSION_LOG_FILENAME = "session.log"
 TRANSCRIPT_FILENAME = "transcript.jsonl"
 ATTEMPTS_LOG_FILENAME = "attempts.jsonl"
@@ -147,18 +147,13 @@ def get_envs(cli_type: str) -> dict[str, str]:
         if github_token:
             envs["GITHUB_TOKEN"] = github_token
     elif cli_type == "gemini":
-        gemini_key = os.environ.get("GEMINI_API_KEY")
-        if gemini_key:
-            envs["GEMINI_API_KEY"] = gemini_key
-        gemini_oauth_access = os.environ.get("GEMINI_OAUTH_ACCESS_TOKEN")
-        if gemini_oauth_access:
-            envs["GEMINI_OAUTH_ACCESS_TOKEN"] = gemini_oauth_access
-        gemini_oauth_refresh = os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN")
-        if gemini_oauth_refresh:
-            envs["GEMINI_OAUTH_REFRESH_TOKEN"] = gemini_oauth_refresh
-        gemini_oauth_id = os.environ.get("GEMINI_OAUTH_ID_TOKEN")
-        if gemini_oauth_id:
-            envs["GEMINI_OAUTH_ID_TOKEN"] = gemini_oauth_id
+        for key in os.environ:
+            if key.startswith("GEMINI_"):
+                envs[key] = os.environ[key]
+    elif cli_type == "junie":
+        for key in os.environ:
+            if key.startswith("JUNIE_"):
+                envs[key] = os.environ[key]
     return envs
 
 

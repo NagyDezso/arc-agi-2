@@ -10,18 +10,25 @@ import time
 from pathlib import Path
 from typing import Any, TextIO
 
+from src.models import UsageTotals
+
 from .base import BaseCLI, capture_raw_output_line, find_last_grid
 
-GEMINI_PRICING = {
-    "gemini-3-flash-preview": (0.50, 3.00, 0.05),
-    "gemini-2.5-flash": (0.30, 2.50, 0.03),
-    "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),
-    "gemini-2.5-pro": (1.25, 10.00, 0.125),
-}
+_IGNORED_STDERR_SUBSTRINGS = (
+    "YOLO mode is enabled. All tool calls will be automatically approved.\nLoaded cached credentials.\n"
+)
 
 
 class GeminiCLI(BaseCLI):
-    def workspace_extras(self, ws_path: Path):
+    def __init__(self) -> None:
+        self.PRICING = {
+            "gemini-3-flash-preview": (0.50, 3.00, 0.05),
+            "gemini-2.5-flash": (0.30, 2.50, 0.03),
+            "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),
+            "gemini-2.5-pro": (1.25, 10.00, 0.125),
+        }
+
+    def workspace_extras(self, ws_path: Path) -> None:
         gemini_dir = ws_path / ".gemini"
         gemini_dir.mkdir(parents=True, exist_ok=True)
         settings = json.dumps(
@@ -68,20 +75,9 @@ class GeminiCLI(BaseCLI):
             )
         (gemini_dir / "settings.json").write_text(settings, encoding="utf-8")
 
-    def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
-        pricing = GEMINI_PRICING.get(model)
-        if pricing is None:
-            return 0.0
-        input_rate, output_rate, cached_rate = pricing
-        return (
-            input_tokens * input_rate / 1_000_000
-            + cached_tokens * cached_rate / 1_000_000
-            + output_tokens * output_rate / 1_000_000
-        )
-
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
-    ) -> tuple[list[str], int, str, dict]:
+    ) -> tuple[list[str], int, str, UsageTotals]:
         base_path = shutil.which("gemini")
         cmd = [base_path, "-y", "-m", model, "-o", "stream-json"]
         if iteration == 0:
@@ -93,7 +89,7 @@ class GeminiCLI(BaseCLI):
 
         raw_lines = []
         num_turns = 0
-        token_stats = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
+        token_stats = UsageTotals()
 
         proc = subprocess.Popen(
             cmd,
@@ -126,7 +122,7 @@ class GeminiCLI(BaseCLI):
         session_start_time = time.time()
         session_timeout = 10800
 
-        def _parse_event(line_str):
+        def _parse_event(line_str: str) -> None:
             nonlocal num_turns, token_stats
             obj = capture_raw_output_line(raw_lines, line_str)
             if obj is None:
@@ -136,11 +132,9 @@ class GeminiCLI(BaseCLI):
                 num_turns += 1
             elif evt_type == "result":
                 stats = obj.get("stats", {})
-                token_stats = {
-                    "input_tokens": stats.get("input", 0),
-                    "cached_tokens": stats.get("cached", 0),
-                    "output_tokens": stats.get("output_tokens", 0),
-                }
+                token_stats.input_tokens += stats.get("input", 0)
+                token_stats.cached_tokens += stats.get("cached", 0)
+                token_stats.output_tokens += stats.get("output_tokens", 0)
 
         while True:
             remaining = session_timeout - (time.time() - session_start_time)
@@ -164,7 +158,6 @@ class GeminiCLI(BaseCLI):
                 break
             _parse_event(line)
 
-        stderr_text = ""
         try:
             proc.wait(timeout=30)
             stderr_text = proc.stderr.read()
@@ -173,10 +166,11 @@ class GeminiCLI(BaseCLI):
             proc.wait()
             with contextlib.suppress(OSError):
                 stderr_text = proc.stderr.read()
-
+        for ignored in _IGNORED_STDERR_SUBSTRINGS:
+            stderr_text = stderr_text.replace(ignored, "")
         reader_thread.join(timeout=5)
 
-        if num_turns == 0 and token_stats["input_tokens"] == 0:
+        if num_turns == 0 and token_stats.input_tokens == 0:
             return raw_lines, num_turns, stderr_text, token_stats
 
         return raw_lines, num_turns, stderr_text, token_stats

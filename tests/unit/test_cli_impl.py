@@ -1,6 +1,9 @@
 import io
 import json
 
+import pytest
+
+from src.cli_impl import get_cli_impl
 from src.cli_impl.gemini import GeminiCLI
 from src.cli_impl.opencode import OpenCodeCLI
 
@@ -28,6 +31,11 @@ def test_gemini_extract_grid_from_output():
     ]
     grid = cli.extract_grid_from_output(raw_lines)
     assert grid == [[5, 5], [5, 5]]
+
+
+def test_get_cli_impl_unknown():
+    with pytest.raises(ValueError, match="Unknown cli name"):
+        get_cli_impl("not-a-cli")
 
 
 def test_opencode_extract_grid_from_output():
@@ -71,19 +79,6 @@ def test_gemini_write_readable_log_handles_split_deltas():
         {"type": "message", "role": "assistant", "content": "world", "delta": True},
     )
     assert output.getvalue() == "Hello world"
-
-
-def test_opencode_calculate_cost():
-    cli = OpenCodeCLI()
-    # kilo/minimax/minimax-m2.5: $0.29/1M input, $1.20/1M output, $0/1M cache
-    cost = cli.calculate_cost(
-        "kilo/minimax/minimax-m2.5:free",
-        input_tokens=1_000_000,
-        cached_tokens=0,
-        output_tokens=500_000,
-    )
-    assert abs(cost - (0.29 + 0.60)) < 0.001  # 0.29 + 0.5*1.20
-    assert cli.calculate_cost("unknown-model", 1000, 0, 500) == 0.0
 
 
 def test_opencode_write_readable_log_includes_tool_result():

@@ -33,6 +33,7 @@ def define_template() -> Template:
         .from_python_image("3.11")
         .apt_install(["curl", "ca-certificates", "gnupg", "jq"])
         .run_cmd("curl -fsSL https://opencode.ai/install | bash", user="root")
+        .run_cmd("curl -fsSL https://junie.jetbrains.com/install.sh | bash", user="root")
         .run_cmd(
             "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs",
             user="root",

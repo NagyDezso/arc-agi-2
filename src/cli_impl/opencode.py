@@ -5,13 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import TextIO
 
-from .base import BaseCLI, capture_raw_output_line, find_last_grid
+from src.models import UsageTotals
 
-# (input $/1M, output $/1M, cache_read $/1M)
-OPENCODE_PRICING = {
-    "kilo/minimax/minimax-m2.5": (0.29, 1.20, 0.00),
-    "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
-}
+from .base import BaseCLI, capture_raw_output_line, find_last_grid
 
 _IGNORED_STDERR_SUBSTRINGS = (
     "Performing one time database migration, may take a few minutes...\n",
@@ -21,6 +17,12 @@ _IGNORED_STDERR_SUBSTRINGS = (
 
 
 class OpenCodeCLI(BaseCLI):
+    def __init__(self) -> None:
+        self.PRICING = {
+            "kilo/minimax/minimax-m2.5": (0.29, 1.20, 0.00),
+            "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
+        }
+
     def workspace_extras(self, ws_path: Path) -> None:
         # OpenCode auth initialization
         auth_path = Path("/root/.local/share/opencode")
@@ -66,7 +68,7 @@ class OpenCodeCLI(BaseCLI):
                             "name": "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2",
                             "limit": {
                                 "context": 400000,
-                                "output": 4096,
+                                "output": 120000,
                             },
                         },
                     },
@@ -79,20 +81,9 @@ class OpenCodeCLI(BaseCLI):
         config_path = ws_path / "opencode.json"
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
-    def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
-        pricing = OPENCODE_PRICING.get(model)
-        if pricing is None:
-            return 0.0
-        input_rate, output_rate, cached_rate = pricing
-        return (
-            input_tokens * input_rate / 1_000_000
-            + cached_tokens * cached_rate / 1_000_000
-            + output_tokens * output_rate / 1_000_000
-        )
-
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
-    ) -> tuple[list[str], int, str, dict]:
+    ) -> tuple[list[str], int, str, UsageTotals]:
         # Resolve the opencode executable path not the same on Windows and Unix
         base_path = shutil.which("opencode")
         cmd = [base_path, "run", "--format", "json", "--agent", "arc_solver"]
@@ -122,8 +113,7 @@ class OpenCodeCLI(BaseCLI):
         proc.stdin.close()
         raw_lines = []
         num_turns = 0
-        token_stats = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
-
+        token_stats = UsageTotals()
         for line in proc.stdout or []:
             obj = capture_raw_output_line(raw_lines, line)
             if obj is None:
@@ -135,9 +125,9 @@ class OpenCodeCLI(BaseCLI):
             elif evt_type == "step_finish":
                 part = obj.get("part", {})
                 tokens = part.get("tokens", {})
-                token_stats["input_tokens"] += tokens.get("input", 0)
-                token_stats["cached_tokens"] += tokens.get("cache", {}).get("read", 0)
-                token_stats["output_tokens"] += tokens.get("output", 0)
+                token_stats.input_tokens += tokens.get("input", 0)
+                token_stats.cached_tokens += tokens.get("cache", {}).get("read", 0)
+                token_stats.output_tokens += tokens.get("output", 0)
 
         stderr_text = proc.stderr.read()
         for ignored in _IGNORED_STDERR_SUBSTRINGS:

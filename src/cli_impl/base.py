@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Protocol, TextIO, runtime_checkable
 
+from src.models import UsageTotals
+
 from .types import Event, EventType
 
 
@@ -53,17 +55,27 @@ def find_last_grid(text: str) -> list[list[int]] | None:
 
 @runtime_checkable
 class BaseCLI(Protocol):
+    PRICING: dict[str, tuple[float, float, float]]
+
     def workspace_extras(self, ws_path: Path) -> None:
         """Applies implementation-specific workspace setup (e.g., settings.json)."""
         ...
 
-    def calculate_cost(self, model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float:
+    def calculate_cost(self, model: str, usage: UsageTotals) -> float:
         """Calculates the API cost based on token usage."""
-        ...
+        pricing = self.PRICING.get(model)
+        if pricing is None:
+            return 0.0
+        input_rate, output_rate, cached_rate = pricing
+        return (
+            usage.input_tokens * input_rate / 1_000_000
+            + usage.cached_tokens * cached_rate / 1_000_000
+            + usage.output_tokens * output_rate / 1_000_000
+        )
 
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
-    ) -> tuple[list[str], int, str, dict]:
+    ) -> tuple[list[str], int, str, UsageTotals]:
         """Runs a CLI session and returns (raw_lines, turns, stderr, stats)."""
         ...
 

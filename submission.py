@@ -512,7 +512,7 @@ def main() -> None:
     if args.results_dir:
         results_dir = args.results_dir
     else:
-        results_dir = script_dir / "src" / "results" / "latest"
+        results_dir = script_dir / "results" / "latest"
 
     output_path = args.output or script_dir / "submission.json"
 
