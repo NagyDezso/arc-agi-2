@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from pydantic import BaseModel, Field
 
@@ -65,6 +65,19 @@ class UsageTotals(BaseModel):
     cached_tokens: int = 0
     output_tokens: int = 0
 
+    def __add__(self, other: UsageTotals) -> UsageTotals:
+        return UsageTotals(
+            input_tokens=self.input_tokens + other.input_tokens,
+            cached_tokens=self.cached_tokens + other.cached_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+        )
+
+    def __iadd__(self, other: UsageTotals) -> Self:
+        self.input_tokens += other.input_tokens
+        self.cached_tokens += other.cached_tokens
+        self.output_tokens += other.output_tokens
+        return self
+
 
 class AgentResultData(BaseModel):
     """Result of one agent run: attempts, costs, usage, and optional error."""
@@ -104,9 +117,7 @@ class TaskScore(BaseModel):
         self.api_cost += agent_data.cost
         self.backend_cost += agent_data.backend_cost
         self.total_cost += agent_data.cost + agent_data.backend_cost
-        self.usage.input_tokens += agent_data.usage.input_tokens
-        self.usage.cached_tokens += agent_data.usage.cached_tokens
-        self.usage.output_tokens += agent_data.usage.output_tokens
+        self.usage += agent_data.usage
 
 
 class TaskProcessResult(BaseModel):

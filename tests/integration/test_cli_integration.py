@@ -38,9 +38,23 @@ def test_opencode_real_usage(temp_workspace: Path, mock_test_prompt: str) -> Non
 @pytest.mark.integration
 def test_junie_real_usage(temp_workspace: Path, mock_test_prompt: str) -> None:
     cli = JunieCLI()
-    cli.workspace_extras(temp_workspace)
     raw_lines, turns, stderr, stats = cli.run_session(temp_workspace, "gemini-flash", mock_test_prompt, "", 0)
     assert_real_usage(raw_lines, turns, stderr, stats)
+
+
+def assert_bad_model_failure(raw_lines: list[str], turns: int, stderr: str) -> None:
+    assert turns == 0
+
+    error_found = (
+        "invalid" in stderr.lower()
+        or "not found" in stderr.lower()
+        or "error" in stderr.lower()
+        or "fail" in stderr.lower()
+    )
+    if not error_found and len(raw_lines) > 0:
+        error_found = any("error" in line.lower() for line in raw_lines)
+
+    assert error_found, f"Expected an error message for invalid model, got stderr: {stderr}"
 
 
 def test_opencode_bad_model_failure(temp_workspace: Path):
@@ -53,23 +67,11 @@ def test_opencode_bad_model_failure(temp_workspace: Path):
         iteration=0,
     )
 
-    assert turns == 0
-
-    error_found = (
-        "invalid" in stderr.lower()
-        or "not found" in stderr.lower()
-        or "error" in stderr.lower()
-        or "fail" in stderr.lower()
-    )
-    if not error_found and len(raw_lines) > 0:
-        error_found = any("error" in line.lower() for line in raw_lines)
-
-    assert error_found, f"Expected an error message for invalid model, got stderr: {stderr}"
+    assert_bad_model_failure(raw_lines, turns, stderr)
 
 
 def test_gemini_bad_model_failure(temp_workspace: Path):
     cli = GeminiCLI()
-    cli.workspace_extras(temp_workspace)
     raw_lines, turns, stderr, _ = cli.run_session(
         ws_path=temp_workspace,
         model="gemini-invalid-model-name",
@@ -78,15 +80,4 @@ def test_gemini_bad_model_failure(temp_workspace: Path):
         iteration=0,
     )
 
-    assert turns == 0
-
-    error_found = (
-        "invalid" in stderr.lower()
-        or "not found" in stderr.lower()
-        or "error" in stderr.lower()
-        or "fail" in stderr.lower()
-    )
-    if not error_found and len(raw_lines) > 0:
-        error_found = any("error" in line.lower() for line in raw_lines)
-
-    assert error_found, f"Expected an error message for invalid model, got stderr: {stderr}"
+    assert_bad_model_failure(raw_lines, turns, stderr)

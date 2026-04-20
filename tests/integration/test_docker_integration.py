@@ -48,7 +48,7 @@ async def test_docker_run_agent_failure():
 
 
 @pytest.mark.asyncio
-async def test_docker_real_execution():
+async def test_docker_opencode_agent():
     root_path = Path(__file__).parent.parent.parent / "src"
     runner = DockerRunner()
 

@@ -171,7 +171,7 @@ def prepare_workspace(
             "test": [{"input": raw_task["test"][test_index]["input"]}],
         }
     (ws_path / "task.json").write_text(json.dumps(public_task))
-    cli_impl.workspace_extras(ws_path)
+    cli_impl.workspace_extras()
     return ws_path
 
 

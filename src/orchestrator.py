@@ -323,7 +323,6 @@ async def run_all(args: CliArgs) -> None:
     run_dir = _resolve_run_dir(args)
     if run_dir is None:
         return
-    setup_logging(run_dir)
 
     context = OrchestrationContext(
         backend_impl=get_backend_runner(args.backend),
@@ -334,6 +333,7 @@ async def run_all(args: CliArgs) -> None:
     except DockerException as e:
         logger.error(f"Failed to setup {args.backend}: {e}")
         return
+    setup_logging(run_dir)
 
     logger.info(f"Loaded {len(task_ids)} tasks")
 

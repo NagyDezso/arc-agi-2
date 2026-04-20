@@ -23,22 +23,18 @@ class OpenCodeCLI(BaseCLI):
             "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
         }
 
-    def workspace_extras(self, ws_path: Path) -> None:
-        # OpenCode auth initialization
-        auth_path = Path("/root/.local/share/opencode")
+    def workspace_extras(self) -> None:
+        auth_path = Path("/root/.local/share/opencode/auth.json")
+        config_path = Path("/root/.config/opencode/opencode.json")
         auth_path.mkdir(parents=True, exist_ok=True)
-        with (auth_path / "auth.json").open("w", encoding="utf-8") as auth_file:
-            json.dump(
-                {
-                    "github-copilot": {
-                        "type": "oauth",
-                        "access": "",
-                        "refresh": os.environ.get("GITHUB_TOKEN", ""),
-                        "expires": 0,
-                    }
-                },
-                auth_file,
-            )
+        auth_path.write_text(json.dumps({
+            "github-copilot": {
+                "type": "oauth",
+                "access": "",
+                "refresh": os.environ.get("GITHUB_TOKEN", ""),
+                "expires": 0,
+            }
+        }), encoding="utf-8")
         config = {
             "$schema": "https://opencode.ai/config.json",
             "agent": {
@@ -78,7 +74,6 @@ class OpenCodeCLI(BaseCLI):
                 }
             },
         }
-        config_path = ws_path / "opencode.json"
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     def run_session(

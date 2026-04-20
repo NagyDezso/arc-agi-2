@@ -28,8 +28,8 @@ class GeminiCLI(BaseCLI):
             "gemini-2.5-pro": (1.25, 10.00, 0.125),
         }
 
-    def workspace_extras(self, ws_path: Path) -> None:
-        gemini_dir = ws_path / ".gemini"
+    def workspace_extras(self) -> None:
+        gemini_dir = Path("/root/.gemini")
         gemini_dir.mkdir(parents=True, exist_ok=True)
         settings = json.dumps(
             {
@@ -51,29 +51,28 @@ class GeminiCLI(BaseCLI):
                         }
                     }
                 },
+                "security": {"auth": {"selectedType": "oauth-personal"}},
             },
             indent=2,
         )
+        (gemini_dir / "settings.json").write_text(settings)
         # Gemini OAuth initialization
-        gemini_access_token = os.environ.get("GEMINI_OAUTH_ACCESS_TOKEN")
-        if gemini_access_token:
-            (gemini_dir / "oauth_creds.json").write_text(
-                json.dumps(
-                    {
-                        "access_token": gemini_access_token,
-                        "refresh_token": os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN"),
-                        "scope": (
-                            "https://www.googleapis.com/auth/userinfo.email openid "
-                            "https://www.googleapis.com/auth/userinfo.profile "
-                            "https://www.googleapis.com/auth/cloud-platform"
-                        ),
-                        "token_type": "Bearer",
-                        "id_token": os.environ.get("GEMINI_OAUTH_ID_TOKEN"),
-                        "expiry_date": 1772303384460,
-                    }
-                )
+        (gemini_dir / "oauth_creds.json").write_text(
+            json.dumps(
+                {
+                    "access_token": os.environ.get("GEMINI_OAUTH_ACCESS_TOKEN"),
+                    "refresh_token": os.environ.get("GEMINI_OAUTH_REFRESH_TOKEN"),
+                    "scope": (
+                        "https://www.googleapis.com/auth/userinfo.email openid "
+                        "https://www.googleapis.com/auth/userinfo.profile "
+                        "https://www.googleapis.com/auth/cloud-platform"
+                    ),
+                    "token_type": "Bearer",
+                    "id_token": os.environ.get("GEMINI_OAUTH_ID_TOKEN"),
+                    "expiry_date": 1775230070262,
+                }
             )
-        (gemini_dir / "settings.json").write_text(settings, encoding="utf-8")
+        )
 
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int

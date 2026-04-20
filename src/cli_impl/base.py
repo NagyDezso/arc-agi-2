@@ -57,7 +57,7 @@ def find_last_grid(text: str) -> list[list[int]] | None:
 class BaseCLI(Protocol):
     PRICING: dict[str, tuple[float, float, float]]
 
-    def workspace_extras(self, ws_path: Path) -> None:
+    def workspace_extras(self) -> None:
         """Applies implementation-specific workspace setup (e.g., settings.json)."""
         ...
 

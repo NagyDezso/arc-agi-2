@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import logging
 import os
@@ -24,7 +23,6 @@ DOCKER_MEMORY = int(os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "1")) * 1024 * 10
 
 
 class DockerRunner(BackendRunner):
-
     def _sanitize_container_name(self, name: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
         return cleaned[:63] if cleaned else "arc-agent"
@@ -52,7 +50,7 @@ class DockerRunner(BackendRunner):
         container_name = self._sanitize_container_name(f"arc-agent-{config.agent_id}-{int(time.time())}")
         run_start = time.time()
         container = None
-        adocker: aiodocker.Docker | None = None
+        adocker: aiodocker.Docker = aiodocker.Docker()
 
         try:
             (run_root / "config.json").write_text(config.model_dump_json(), encoding="utf-8")
@@ -90,7 +88,6 @@ class DockerRunner(BackendRunner):
                 },
             }
 
-            adocker = aiodocker.Docker()
             container = await adocker.containers.create(config=container_config, name=container_name)
             await container.start()
             with (
@@ -137,15 +134,9 @@ class DockerRunner(BackendRunner):
         else:
             return result
         finally:
-
-            async def _cleanup_backend() -> None:
-                if container is not None:
-                    with contextlib.suppress(DockerError):
-                        await container.delete(force=True)
-                shutil.rmtree(run_root, ignore_errors=True)
-                if adocker is not None:
-                    await adocker.close()
-
-            # Finish closing aiohttp/Docker pipes even when Ctrl+C cancels the agent task
-            # (avoids "Unclosed connector" / proactor noise on Windows).
-            await asyncio.shield(_cleanup_backend())
+            if container:
+                with contextlib.suppress(DockerError):
+                    await container.delete(force=True)
+            shutil.rmtree(run_root, ignore_errors=True)
+            if adocker:
+                await adocker.close()
