@@ -23,18 +23,25 @@ class OpenCodeCLI(BaseCLI):
             "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
         }
 
-    def workspace_extras(self) -> None:
+    def workspace_extras(self, model: str) -> None:
         auth_path = Path("/root/.local/share/opencode/auth.json")
         config_path = Path("/root/.config/opencode/opencode.json")
-        auth_path.mkdir(parents=True, exist_ok=True)
-        auth_path.write_text(json.dumps({
-            "github-copilot": {
-                "type": "oauth",
-                "access": "",
-                "refresh": os.environ.get("GITHUB_TOKEN", ""),
-                "expires": 0,
-            }
-        }), encoding="utf-8")
+        auth_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "github-copilot": {
+                        "type": "oauth",
+                        "access": "",
+                        "refresh": os.environ.get("GITHUB_TOKEN", ""),
+                        "expires": 0,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        model_name = model.split("/", 1)[-1]
         config = {
             "$schema": "https://opencode.ai/config.json",
             "agent": {
@@ -58,13 +65,11 @@ class OpenCodeCLI(BaseCLI):
             "provider": {
                 "lmstudio": {
                     "models": {
-                        "qwen3.5:2b": {"name": "qwen3.5:2b"},
-                        "qwen3.5:0.8b": {"name": "qwen3.5:0.8b"},
-                        "qwen3.5:27b": {
-                            "name": "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2",
+                        model_name: {
+                            "name": model_name,
                             "limit": {
-                                "context": 400000,
-                                "output": 120000,
+                                "context": 60000,
+                                "output": 60000,
                             },
                         },
                     },

@@ -123,7 +123,7 @@ class JunieCLI(BaseCLI):
         }
         self._session_id: str | None = None
 
-    def workspace_extras(self) -> None:
+    def workspace_extras(self, model: str) -> None:
         junie_dir = Path("/root/.junie")
         junie_dir.mkdir(parents=True, exist_ok=True)
         (junie_dir / "secure_credentials.json").write_text(

@@ -28,7 +28,7 @@ class GeminiCLI(BaseCLI):
             "gemini-2.5-pro": (1.25, 10.00, 0.125),
         }
 
-    def workspace_extras(self) -> None:
+    def workspace_extras(self, model: str) -> None:
         gemini_dir = Path("/root/.gemini")
         gemini_dir.mkdir(parents=True, exist_ok=True)
         settings = json.dumps(
@@ -156,7 +156,7 @@ class GeminiCLI(BaseCLI):
             if line is None:
                 break
             _parse_event(line)
-
+        stderr_text = ""
         try:
             proc.wait(timeout=30)
             stderr_text = proc.stderr.read()

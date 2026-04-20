@@ -147,31 +147,29 @@ def run_transform(transform_path: Path, train_examples: list[dict]) -> tuple[boo
 
 
 def prepare_workspace(
-    raw_task: dict,
-    test_index: int,
+    config: AgentConfig,
     cli_impl: BaseCLI,
     seed: int = 0,
-    whole_task: bool = False,
 ) -> Path:
     ws_path = Path("/workspace")
     ws_path.mkdir(parents=True, exist_ok=True)
-    train_examples = list(raw_task["train"])
+    train_examples = list(config.raw_task["train"])
     if len(train_examples) > 1 and seed > 0:
         rng = random.Random(seed)
         rng.shuffle(train_examples)
 
-    if whole_task:
+    if config.whole_task:
         public_task = {
             "train": train_examples,
-            "test": [{"input": test_case["input"]} for test_case in raw_task["test"]],
+            "test": [{"input": test_case["input"]} for test_case in config.raw_task["test"]],
         }
     else:
         public_task = {
             "train": train_examples,
-            "test": [{"input": raw_task["test"][test_index]["input"]}],
+            "test": [{"input": config.raw_task["test"][config.test_index]["input"]}],
         }
     (ws_path / "task.json").write_text(json.dumps(public_task))
-    cli_impl.workspace_extras()
+    cli_impl.workspace_extras(config.model)
     return ws_path
 
 
@@ -197,7 +195,7 @@ def run_agent(config: AgentConfig, cli: BaseCLI) -> AgentResultData:
     try:
         ens_match = re.search(r"_ens(\d+)", config.agent_id)
         seed = int(ens_match.group(1)) if ens_match else 0
-        ws_path = prepare_workspace(config.raw_task, config.test_index, cli, seed=seed, whole_task=config.whole_task)
+        ws_path = prepare_workspace(config, cli, seed=seed)
 
         _emit_status(config.agent_id, f"started model={config.model}")
         feedback = ""

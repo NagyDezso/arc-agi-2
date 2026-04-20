@@ -271,7 +271,10 @@ def _update_latest_run_link(run_dir: Path) -> None:
     latest = RESULTS / "latest"
     if latest.is_symlink() or latest.exists():
         latest.unlink()
-    latest.symlink_to(run_dir.name)
+    try:
+        latest.symlink_to(run_dir.name)
+    except OSError:
+        logger.warning(f"Failed to create symlink: {latest} -> {run_dir.name}")
 
 
 def _load_completed_tasks(run_dir: Path) -> list[TaskProcessResult]:
