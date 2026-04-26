@@ -268,7 +268,9 @@ class GeminiCLI(BaseCLI):
         elif evt_type == "result":
             stats = obj.get("stats", {})
             rf.write(
-                f"---\n**Result:** tokens={stats.get('total_tokens', '?')}, duration={stats.get('duration_ms', '?')}ms, tool_calls={stats.get('tool_calls', '?')}\n"
+                f"---\n**Result:** tokens={stats.get('total_tokens', '?')}, "
+                f"duration={stats.get('duration_ms', '?')}ms, "
+                f"tool_calls={stats.get('tool_calls', '?')}\n"
             )
         elif evt_type == "harness_feedback":
             nxt = obj.get("for_iteration", "?")

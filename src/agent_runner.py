@@ -130,7 +130,8 @@ def run_transform(transform_path: Path, train_examples: list[dict]) -> tuple[boo
         if not isinstance(result, np.ndarray):
             return (
                 False,
-                f"Training example {index} (0-indexed): transform returned {type(result).__name__}, expected np.ndarray.\n"
+                f"Training example {index} (0-indexed): transform returned "
+                f"{type(result).__name__}, expected np.ndarray.\n"
                 "Try a fundamentally different approach.",
                 None,
             )

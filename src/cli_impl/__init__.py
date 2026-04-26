@@ -6,11 +6,14 @@ from .junie import JunieCLI
 from .opencode import OpenCodeCLI
 from .types import Event, EventType
 
+__all__ = ["CLI_IMPLS", "BaseCLI", "Event", "EventType", "get_cli_impl"]
+
 CLI_IMPLS = {
     "opencode": OpenCodeCLI,
     "gemini": GeminiCLI,
     "junie": JunieCLI,
 }
+
 
 def get_cli_impl(cli_name: str) -> BaseCLI:
     try:

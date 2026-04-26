@@ -55,7 +55,8 @@ class E2BRunner(BackendRunner):
                     raise
                 wait = 2**attempt * 5
                 logger.warning(
-                    f"  [e2b] {config.agent_id}: sandbox create failed (attempt {attempt + 1}/5), retrying in {wait}s: {e}"
+                    f"  [e2b] {config.agent_id}: sandbox create failed "
+                    f"(attempt {attempt + 1}/5), retrying in {wait}s: {e}"
                 )
                 await asyncio.sleep(wait)
 
@@ -123,7 +124,7 @@ class E2BRunner(BackendRunner):
 
         except Exception as e:
             err_msg = f"E2B sandbox error: {e}"
-            logger.error(f"[e2b-error] {err_msg}", exc_info=True)
+            logger.exception(f"[e2b-error] {err_msg}")
             sandbox_duration = time.time() - sandbox_start
             e2b_cost = (sandbox_duration / 3600) * E2B_CPU_COUNT * E2B_COST_PER_VCPU_HOUR
             return AgentResultData(

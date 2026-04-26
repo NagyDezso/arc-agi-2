@@ -1,5 +1,4 @@
 import json
-import random
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -29,9 +28,10 @@ def mock_raw_task_file(temp_workspace, mock_task_data):
     task_file.write_text(json.dumps(mock_task_data), encoding="utf-8")
     return task_file
 
+
 @pytest.fixture
 def mock_test_prompt() -> str:
-    return f"""Hello this a test prompt."""
+    return """Hello this a test prompt."""
 
 
 @pytest.fixture

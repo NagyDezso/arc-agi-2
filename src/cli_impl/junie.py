@@ -158,7 +158,7 @@ class JunieCLI(BaseCLI):
         if not base_path:
             return [], 0, "junie executable not found in PATH", UsageTotals()
 
-        cmd: list[str] = [base_path,"--skip-update-check","--output-format","json","--model",model]
+        cmd: list[str] = [base_path, "--skip-update-check", "--output-format", "json", "--model", model]
         if iteration == 0:
             self._session_id = None
             task_text = initial_prompt

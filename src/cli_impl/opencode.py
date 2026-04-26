@@ -46,7 +46,9 @@ class OpenCodeCLI(BaseCLI):
             "$schema": "https://opencode.ai/config.json",
             "agent": {
                 "arc_solver": {
-                    "prompt": "You are participating in a puzzle solving competition. You are an expert at solving puzzles.",
+                    "prompt": (
+                        "You are participating in a puzzle solving competition. You are an expert at solving puzzles."
+                    ),
                     "tools": {
                         "webfetch": False,
                         "skill": False,
@@ -220,7 +222,8 @@ class OpenCodeCLI(BaseCLI):
         elif evt_type == "step_finish":
             tokens = part.get("tokens", {})
             rf.write(
-                f"---\n**Step:** tokens={tokens.get('input', 0) + tokens.get('output', 0)}, reason={part.get('reason', '?')}\n"
+                f"---\n**Step:** tokens={tokens.get('input', 0) + tokens.get('output', 0)}, "
+                f"reason={part.get('reason', '?')}\n"
             )
         elif evt_type == "harness_feedback":
             nxt = obj.get("for_iteration", "?")
