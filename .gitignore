@@ -25,3 +25,20 @@ submission*.json
 cost_breakdown.json
 
 results/
+
+#Latex generated files
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lot
+*.bcf
+*.run.xml
+*.xdv
+*.lof
+*.*SAVE-ERROR
