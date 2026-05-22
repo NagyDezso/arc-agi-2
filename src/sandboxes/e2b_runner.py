@@ -6,7 +6,7 @@ from pathlib import Path
 
 from e2b import ALL_TRAFFIC, AsyncSandbox, SandboxNetworkOpts, Stderr, Stdout
 
-from src.backends.base import BackendRunner
+from src.sandboxes.base import SandboxRunner
 from src.models import AgentConfig, AgentResultData
 from src.orchestrator import ROOT, SESSION_LOG_FILENAME, TRANSCRIPT_FILENAME
 
@@ -16,11 +16,11 @@ E2B_CPU_COUNT = 2
 E2B_COST_PER_VCPU_HOUR = 0.05
 
 
-class E2BRunner(BackendRunner):
+class E2BRunner(SandboxRunner):
     def setup(self, root_path: Path, cli_type: str) -> None:
         pass
 
-    async def start_agent_backend(
+    async def start_agent_sandbox(
         self,
         config: AgentConfig,
     ) -> AgentResultData:
@@ -112,8 +112,8 @@ class E2BRunner(BackendRunner):
             sandbox_duration = time.time() - sandbox_start
             e2b_cost = (sandbox_duration / 3600) * E2B_CPU_COUNT * E2B_COST_PER_VCPU_HOUR
 
-            result.backend_cost = e2b_cost
-            result.backend_duration = sandbox_duration
+            result.sandbox_cost = e2b_cost
+            result.sandbox_duration = sandbox_duration
 
             logger.info(
                 f"[e2b-cost] API=${result.cost:.4f}, "
@@ -132,8 +132,8 @@ class E2BRunner(BackendRunner):
                 agent_id=config.agent_id,
                 test_index=config.test_index,
                 error=err_msg,
-                backend_cost=e2b_cost,
-                backend_duration=sandbox_duration,
+                sandbox_cost=e2b_cost,
+                sandbox_duration=sandbox_duration,
             )
         finally:
             if sandbox:

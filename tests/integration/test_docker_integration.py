@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.backends.docker_runner import DockerRunner
+from src.sandboxes.docker_runner import DockerRunner
 from src.models import AgentConfig
 from src.orchestrator import SESSION_LOG_FILENAME
 
@@ -20,7 +20,7 @@ async def test_docker_run_agent_failure():
 
         runner.setup(root_path, cli_type="opencode")
 
-        result = await runner.start_agent_backend(
+        result = await runner.start_agent_sandbox(
             config=AgentConfig(
                 task_id="test_docker_fail",
                 agent_id="agent_docker_fail",
@@ -59,7 +59,7 @@ async def test_docker_opencode_agent():
 
         runner.setup(root_path, cli_type="opencode")
 
-        result = await runner.start_agent_backend(
+        result = await runner.start_agent_sandbox(
             config=AgentConfig(
                 task_id="test_docker_int",
                 agent_id="agent_docker_int",

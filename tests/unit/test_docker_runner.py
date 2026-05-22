@@ -1,7 +1,7 @@
 import io
 import logging
 
-from src.backends.docker_runner import DockerRunner
+from src.sandboxes.docker_runner import DockerRunner
 from src.cli_impl import Event, EventType
 
 

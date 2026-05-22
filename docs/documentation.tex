@@ -99,7 +99,7 @@ The codebase started as a fork of Confluence Labs' \emph{Saturating ARC-AGI-2} \
 
 \begin{itemize}
   \item A pluggable CLI layer: a common \texttt{BaseCLI} protocol with three concrete adapters (Gemini, OpenCode, Junie), so swapping the agent CLI is a single argument change.
-  \item A Docker backend sitting alongside the original E2B runner under a shared \texttt{BackendRunner} protocol.
+  \item A Docker sandbox sitting alongside the original E2B runner under a shared \texttt{SandboxRunner} protocol.
   \item A typed model layer (Pydantic v2) and a refactored, typed orchestrator API.
   \item A streaming log protocol that splits agent stdout into a session log, a transcript, and a human-readable Markdown rendering, with per-call cost tracking.
   \item The full test suite with multiple tiers of unit, functional and integration tests.
@@ -107,7 +107,7 @@ The codebase started as a fork of Confluence Labs' \emph{Saturating ARC-AGI-2} \
 
 \subsection{Why testing is needed}
 
-The solver assigns multiple agents for each task, each running in its own sandbox, each calling a remote LLM API dozens of times. A single full evaluation run hits the API budget hard. Without tests, every refactor is a coin flip: you might find out at hour eight that a typo in the cost aggregator silently double-counted half the runs. With tests, the parser, the diff formatter, the orchestrator's resume logic, and the backend's output routing are all pinned down before any of that runs. The functional layer in particular catches the kind of bug that only shows up under concurrency: ordering issues, missing semaphore acquisitions, exception handling that drops one agent and crashes the rest.
+The solver assigns multiple agents for each task, each running in its own sandbox, each calling a remote LLM API dozens of times. A single full evaluation run hits the API budget hard. Without tests, every refactor is a coin flip: you might find out at hour eight that a typo in the cost aggregator silently double-counted half the runs. With tests, the parser, the diff formatter, the orchestrator's resume logic, and the sandbox's output routing are all pinned down before any of that runs. The functional layer in particular catches the kind of bug that only shows up under concurrency: ordering issues, missing semaphore acquisitions, exception handling that drops one agent and crashes the rest.
 
 \subsection{Architecture}
 
@@ -146,10 +146,10 @@ The solver assigns multiple agents for each task, each running in its own sandbo
 
     % Protocols, well separated horizontally
     \node[iface, below=14mm of orch, xshift=-32mm] (be) {%
-      \footnotesize\textit{«protocol»}\\\textbf{BackendRunner}
+      \footnotesize\textit{«protocol»}\\\textbf{SandboxRunner}
       \nodepart{two}\footnotesize
       + setup()\\
-      + start\_agent\_backend()
+      + start\_agent\_sandbox()
     };
     \node[iface, below=14mm of orch, xshift=32mm] (cli) {%
       \footnotesize\textit{«protocol»}\\\textbf{BaseCLI}
@@ -158,7 +158,7 @@ The solver assigns multiple agents for each task, each running in its own sandbo
       + extract\_grid\_from\_output()
     };
 
-    % Concrete backends — two boxes under BackendRunner
+    % Concrete sandboxes — two boxes under SandboxRunner
     \node[concrete, below=14mm of be, xshift=-13mm] (docker) {DockerRunner};
     \node[concrete, below=14mm of be, xshift=13mm]  (e2b)    {E2BRunner};
 
@@ -190,7 +190,7 @@ The solver assigns multiple agents for each task, each running in its own sandbo
   \label{fig:uml}
 \end{figure}
 
-At runtime, after parsing the command line arguments, the Orchestrator schedules one coroutine per ARC task. Each of them assings agents through a API call semaphore, and every agent goes through the chosen BackendRunner into a sandbox where the agent runner controls the chosen CLI for some number of refinement turns.
+At runtime, after parsing the command line arguments, the Orchestrator schedules one coroutine per ARC task. Each of them assings agents through a API call semaphore, and every agent goes through the chosen SandboxRunner into a sandbox where the agent runner controls the chosen CLI for some number of refinement turns.
 
 \section{Testing Framework}
 
@@ -369,7 +369,7 @@ Real orchestrator and agent runner, mocked external dependencies (Docker, HTTP, 
   \item[\texttt{test\_process\_task\_handles\_empty\_attempts}]
     \textbf{Description:} Verifies an empty attempt list is not counted as a submission. \\
     \textbf{Input:} Agent returns \texttt{attempts=[]}. \\
-    \textbf{Expected:} \texttt{score.submitted == 0}, backend still called once.
+    \textbf{Expected:} \texttt{score.submitted == 0}, sandbox still called once.
 \end{description}
 
 \paragraph{Failure isolation:}
@@ -386,21 +386,21 @@ Real orchestrator and agent runner, mocked external dependencies (Docker, HTTP, 
 
 \paragraph{Concurrency \& resume:}
 \begin{description}[leftmargin=10pt,style=nextline,itemsep=6pt,parsep=1pt,font=\normalfont]
-  \item[\texttt{test\_process\_task\_respects\_backend\_semaphore\_concurrency\_limit}]
+  \item[\texttt{test\_process\_task\_respects\_sandbox\_semaphore\_concurrency\_limit}]
     \textbf{Description:} Verifies the concurrency semaphore actually serialises agent dispatch. \\
     \textbf{Input:} 3 agents through a semaphore with a limit of 1. \\
-    \textbf{Expected:} \texttt{backend.max\_active == 1} (serialised).
+    \textbf{Expected:} \texttt{sandbox.max\_active == 1} (serialised).
   \item[\texttt{test\_run\_all\_skips\_completed\_tasks\_and\_writes\_summary}]
     \textbf{Description:} Verifies resume logic skips already-finished tasks and still reports them in the summary. \\
     \textbf{Input:} Resume dir already contains \texttt{task\_a.json}, list \texttt{[a,b,c]}, \texttt{limit=1}. \\
     \textbf{Expected:} Only \texttt{task\_b} processed, \texttt{summary.json} reports all three in totals.
 \end{description}
 
-\paragraph{End-to-end (mock backend):}
+\paragraph{End-to-end (mock sandbox):}
 \begin{description}[leftmargin=10pt,style=nextline,itemsep=6pt,parsep=1pt,font=\normalfont]
   \item[\texttt{test\_process\_task\_integration}]
-    \textbf{Description:} Smoke-tests the full pipeline against a mock backend, checking every artefact lands on disk. \\
-    \textbf{Input:} \texttt{MockBackend} returns one attempt. \\
+    \textbf{Description:} Smoke-tests the full pipeline against a mock sandbox, checking every artefact lands on disk. \\
+    \textbf{Input:} \texttt{MockSandbox} returns one attempt. \\
     \textbf{Expected:} \texttt{score.submitted == 1}, run dir contains \texttt{task\_results/*.json} and per-agent logs (\texttt{session.log}, \texttt{transcript.jsonl}, \texttt{readable.md}, \texttt{attempts.jsonl}).
 \end{description}
 
@@ -431,7 +431,7 @@ Real credentials, real services. Skipped in CI. Can be run locally with provided
     \textbf{Input:} Real container running an OpenCode session. \\
     \textbf{Expected:} \texttt{session.log} exists and contains the start marker.
   \item[\texttt{test\_docker\_run\_agent\_failure}]
-    \textbf{Description:} Verifies the Docker backend handles a misconfigured run without crashing. \\
+    \textbf{Description:} Verifies the Docker sandbox handles a misconfigured run without crashing. \\
     \textbf{Input:} Real container with a bad config. \\
     \textbf{Expected:} No crash, no attempts submitted, error reaches \texttt{stderr}.
 \end{description}
@@ -460,7 +460,7 @@ jobs:
 
 \section{Summary}
 
-The test suite covers the parts of the system where regressions are silent and expensive: the diff formatter that decides whether an agent's transform is correct, the parsers that pull a grid out of three different CLI output formats, the orchestrator's state machine across multi-agent and multi-test inputs, the resume logic that picks up partial runs, and the Docker backend's output routing. The functional tests in particular cover concurrency-sensitive code paths: semaphore contention, exception propagation, partial failures. Preventing these errors reduces the risk of failed runs, that could be costly.
+The test suite covers the parts of the system where regressions are silent and expensive: the diff formatter that decides whether an agent's transform is correct, the parsers that pull a grid out of three different CLI output formats, the orchestrator's state machine across multi-agent and multi-test inputs, the resume logic that picks up partial runs, and the Docker sandbox's output routing. The functional tests in particular cover concurrency-sensitive code paths: semaphore contention, exception propagation, partial failures. Preventing these errors reduces the risk of failed runs, that could be costly.
 
 \bigskip
 \hrule

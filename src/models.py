@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Self
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from backends.base import BackendRunner
+    from sandboxes.base import SandboxRunner
     from cli_impl import BaseCLI
 
 
@@ -23,14 +23,14 @@ class CliArgs(BaseModel):
     concurrency: int
     limit: int | None
     cli: str
-    backend: str
+    sandbox: str
 
 
 class AgentConfig(BaseModel):
     """Specification for a single agent run on one test case.
 
     One spec is created per (task, agent, test_index) combination. Passed to
-    the backend's run_agent to execute the agent.
+    the sandbox's run_agent to execute the agent.
     """
 
     task_id: str
@@ -87,8 +87,8 @@ class AgentResultData(BaseModel):
     test_index: int
     attempts: list[AgentAttempt] = Field(default_factory=list)
     cost: float = 0.0
-    backend_cost: float = 0.0
-    backend_duration: float = 0.0
+    sandbox_cost: float = 0.0
+    sandbox_duration: float = 0.0
     turns: int = 0
     usage: UsageTotals = Field(default_factory=UsageTotals)
     elapsed: float = 0.0
@@ -108,15 +108,15 @@ class TaskScore(BaseModel):
     total: int = Field(default=0)
     elapsed: float = Field(default=0.0)
     api_cost: float = Field(default=0.0)
-    backend_cost: float = Field(default=0.0)
+    sandbox_cost: float = Field(default=0.0)
     total_cost: float = Field(default=0.0)
     usage: UsageTotals = Field(default_factory=UsageTotals)
 
     def update_score(self, agent_data: AgentResultData) -> None:
         self.elapsed = max(self.elapsed, agent_data.elapsed)
         self.api_cost += agent_data.cost
-        self.backend_cost += agent_data.backend_cost
-        self.total_cost += agent_data.cost + agent_data.backend_cost
+        self.sandbox_cost += agent_data.sandbox_cost
+        self.total_cost += agent_data.cost + agent_data.sandbox_cost
         self.usage += agent_data.usage
 
 
@@ -140,7 +140,7 @@ class TaskProcessResult(BaseModel):
 
 @dataclass
 class OrchestrationContext:
-    """Runtime context for task processing: backend and CLI implementation to use."""
+    """Runtime context for task processing: sandbox and CLI implementation to use."""
 
-    backend_impl: BackendRunner
+    sandbox_impl: SandboxRunner
     cli_impl: BaseCLI

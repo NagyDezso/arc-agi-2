@@ -10,18 +10,18 @@ from src.models import AgentConfig, AgentResultData
 logger = logging.getLogger(__name__)
 
 
-class BackendRunner(Protocol):
-    """Protocol for execution backends (Docker, E2B) that run CLI agents.
+class SandboxRunner(Protocol):
+    """Protocol for execution sandboxes (Docker, E2B) that run CLI agents.
 
     Implementations must provide setup (one-time initialization) and run_agent
     (async execution of a single agent on a task).
     """
 
     def setup(self, root_path: Path, cli_type: str) -> None:
-        """Initialize the backend. Called once before any agent runs."""
+        """Initialize the sandbox. Called once before any agent runs."""
         ...
 
-    async def start_agent_backend(
+    async def start_agent_sandbox(
         self,
         config: AgentConfig,
     ) -> AgentResultData:

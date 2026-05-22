@@ -59,7 +59,7 @@ uv run python main.py \
     --model "${GEMINI_CLI_MODEL:-gemini-3.1-pro-preview}" \
     --concurrency "${GEMINI_CLI_CONCURRENCY:-4}" \
     --cli gemini \
-    --backend docker \
+    --sandbox docker \
     --name "$RUN_NAME" &
 PID_SOLVER=$!
 

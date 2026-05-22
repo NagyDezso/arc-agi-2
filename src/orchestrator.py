@@ -2,7 +2,7 @@
 
 The orchestrator runs locally and handles:
 - Task loading from ARC-AGI data files
-- Dispatching agents to backends
+- Dispatching agents to sandboxes
 - Writing logs (session, transcript, readable, attempts)
 - Results aggregation and summary.json
 - Resume logic (skip completed tasks)
@@ -21,7 +21,7 @@ from typing import Any
 
 from docker.errors import DockerException
 
-from src.backends import get_backend_runner
+from src.sandboxes import get_sandbox_runner
 from src.cli_impl import BaseCLI, get_cli_impl
 from src.logger import setup_logging
 from src.models import (
@@ -197,14 +197,14 @@ def _build_agent_configs(
 async def _run_agent_config(
     config: AgentConfig,
     run_dir: Path,
-    backend_semaphore: asyncio.Semaphore,
+    sandbox_semaphore: asyncio.Semaphore,
     context: OrchestrationContext,
 ) -> AgentResultData:
     try:
-        async with backend_semaphore:
-            result = await context.backend_impl.start_agent_backend(config)
+        async with sandbox_semaphore:
+            result = await context.sandbox_impl.start_agent_sandbox(config)
     except Exception as e:
-        # Create error result when backend fails - include empty attempt so it's recorded
+        # Create error result when sandbox fails - include empty attempt so it's recorded
         result = AgentResultData(
             task_id=config.task_id,
             agent_id=config.agent_id,
@@ -226,7 +226,7 @@ async def process_task(
     task_id: str,
     config: CliArgs,
     run_dir: Path,
-    backend_semaphore: asyncio.Semaphore,
+    sandbox_semaphore: asyncio.Semaphore,
     context: OrchestrationContext,
 ) -> TaskProcessResult:
     raw_task = load_task_json(task_id)
@@ -234,7 +234,7 @@ async def process_task(
     configs = _build_agent_configs(task_id, raw_task, run_dir, config)
 
     agent_results = await asyncio.gather(
-        *[_run_agent_config(config, run_dir, backend_semaphore, context) for config in configs],
+        *[_run_agent_config(config, run_dir, sandbox_semaphore, context) for config in configs],
     )
     result = TaskProcessResult(task_id=task_id)
     for agent_result in agent_results:
@@ -328,13 +328,13 @@ async def run_all(args: CliArgs) -> None:
         return
 
     context = OrchestrationContext(
-        backend_impl=get_backend_runner(args.backend),
+        sandbox_impl=get_sandbox_runner(args.sandbox),
         cli_impl=get_cli_impl(args.cli),
     )
     try:
-        context.backend_impl.setup(ROOT, args.cli)
+        context.sandbox_impl.setup(ROOT, args.cli)
     except DockerException as e:
-        logger.error(f"Failed to setup {args.backend}: {e}")
+        logger.error(f"Failed to setup {args.sandbox}: {e}")
         return
     setup_logging(run_dir)
 
@@ -354,12 +354,12 @@ async def run_all(args: CliArgs) -> None:
 
     all_scores, total_submitted, total_tests, total_cost = _accumulate_existing_scores(completed_tasks)
     completed = len(completed_tasks)
-    backend_semaphore = asyncio.Semaphore(args.concurrency)
+    sandbox_semaphore = asyncio.Semaphore(args.concurrency)
 
     async def process_and_report(task_id: str) -> None:
         nonlocal completed, total_submitted, total_tests, total_cost
         try:
-            result = await process_task(task_id, args, run_dir, backend_semaphore, context)
+            result = await process_task(task_id, args, run_dir, sandbox_semaphore, context)
         except Exception:
             completed += 1
             logger.exception(f"[{completed}/{len(task_ids)}] CRASH {task_id}")
@@ -381,7 +381,7 @@ async def run_all(args: CliArgs) -> None:
 
     summary = {
         "cli": args.cli,
-        "backend": args.backend,
+        "sandbox": args.sandbox,
         "model": args.model,
         "num_agents": args.num_agents,
         "max_iterations": args.max_iterations,

@@ -44,10 +44,10 @@ def main(
         "--cli",
         help="CLI to use: opencode, gemini, or junie (default: gemini)",
     ),
-    backend: str = typer.Option(
+    sandbox: str = typer.Option(
         "docker",
-        "--backend",
-        help="Execution backend (docker or e2b, default: docker)",
+        "--sandbox",
+        help="Execution sandbox (docker or e2b, default: docker)",
     ),
 ) -> None:
     """ARC-AGI CLI Solver - solves ARC-AGI tasks using AI agents."""
@@ -63,7 +63,7 @@ def main(
         concurrency=concurrency,
         limit=limit,
         cli=cli,
-        backend=backend,
+        sandbox=sandbox,
     )
     asyncio.run(run_all(args))
 

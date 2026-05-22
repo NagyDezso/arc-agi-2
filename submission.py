@@ -195,7 +195,7 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
     """Fallback: aggregate per-agent costs from task_results/*.json files.
 
     Used when summary.json is missing (e.g. process killed before writing it).
-    Returns: {task_id: {"api_cost": float, "backend_cost": float, "total_cost": float, "usage": dict}}
+    Returns: {task_id: {"api_cost": float, "sandbox_cost": float, "total_cost": float, "usage": dict}}
     """
     task_results_dir = results_dir / "task_results"
     if not task_results_dir.is_dir():
@@ -214,7 +214,7 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
         if score:
             out[task_id] = {
                 "api_cost": score.get("api_cost", 0),
-                "backend_cost": score.get("backend_cost", 0),
+                "sandbox_cost": score.get("sandbox_cost", 0),
                 "total_cost": score.get("total_cost", 0),
                 "usage": score.get("usage", {}),
             }
@@ -222,18 +222,18 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
             # Fallback: aggregate from agents
             agents = data.get("agents", {})
             api_cost = 0.0
-            backend_cost = 0.0
+            sandbox_cost = 0.0
             total_cost = 0.0
             usage: dict[str, int] = {}
             for agent_info in agents.values():
                 api_cost += agent_info.get("cost", 0)
-                backend_cost += agent_info.get("backend_cost", 0)
+                sandbox_cost += agent_info.get("sandbox_cost", 0)
                 total_cost += agent_info.get("total_cost", 0)
                 for k, v in agent_info.get("usage", {}).items():
                     usage[k] = usage.get(k, 0) + (v if isinstance(v, int) else 0)
             out[task_id] = {
                 "api_cost": api_cost,
-                "backend_cost": backend_cost,
+                "sandbox_cost": sandbox_cost,
                 "total_cost": total_cost,
                 "usage": usage,
             }
@@ -248,49 +248,49 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
     """
     summary = load_summary(results_dir)
 
-    # Get CLI and backend info from summary
+    # Get CLI and sandbox info from summary
     cli = "unknown"
-    backend = "unknown"
+    sandbox = "unknown"
     model = "unknown"
     if summary:
         cli = summary.get("cli", "unknown")
-        backend = summary.get("backend", "unknown")
+        sandbox = summary.get("sandbox", "unknown")
         model = summary.get("model", "unknown")
 
-    # Determine backend pricing description
-    if backend == "e2b":
-        backend_pricing = {
+    # Determine sandbox pricing description
+    if sandbox == "e2b":
+        sandbox_pricing = {
             "vcpus": 2,
             "cost_per_vcpu_hour_usd": 0.05,
             "total_hourly_rate_usd": 0.10,
             "formula": "(duration_seconds / 3600) * vcpus * cost_per_vcpu_hour",
         }
-    elif backend == "docker":
-        backend_pricing = {
+    elif sandbox == "docker":
+        sandbox_pricing = {
             "note": "Local Docker execution - no cloud infrastructure costs",
             "cost": 0.0,
         }
     else:
-        backend_pricing = {"note": f"Unknown backend: {backend}"}
+        sandbox_pricing = {"note": f"Unknown sandbox: {sandbox}"}
 
     breakdown = {
         "_documentation": {
             "purpose": "Cost breakdown",
             "generated_by": "submission.py",
             "cli": cli,
-            "backend": backend,
-            "backend_pricing": backend_pricing,
+            "sandbox": sandbox,
+            "sandbox_pricing": sandbox_pricing,
             "note": f"API costs calculated from {cli} CLI token reports using published pricing",
         },
         "solver": {},
-        "metadata": {"cli": cli, "backend": backend, "num_tasks": num_tasks},
+        "metadata": {"cli": cli, "sandbox": sandbox, "num_tasks": num_tasks},
     }
 
     if summary:
         tasks = summary.get("tasks", {})
         api_cost = sum(task.get("api_cost", 0.0) for task in tasks.values())
-        backend_cost = sum(task.get("backend_cost", 0.0) for task in tasks.values())
-        total = api_cost + backend_cost
+        sandbox_cost = sum(task.get("sandbox_cost", 0.0) for task in tasks.values())
+        total = api_cost + sandbox_cost
 
         total_usage = {
             "input_tokens": 0,
@@ -305,16 +305,16 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
 
         breakdown["solver"] = {
             "cli": cli,
-            "backend": backend,
+            "sandbox": sandbox,
             "model": model,
             "api_cost": round(api_cost, 4),
-            "backend_cost": round(backend_cost, 4),
+            "sandbox_cost": round(sandbox_cost, 4),
             "total_cost": round(total, 4),
             "usage": total_usage,
             "per_task": {
                 task_id: {
                     "api_cost": round(task.get("api_cost", 0.0), 4),
-                    "backend_cost": round(task.get("backend_cost", 0.0), 4),
+                    "sandbox_cost": round(task.get("sandbox_cost", 0.0), 4),
                     "total_cost": round(task.get("total_cost", 0.0), 4),
                     "elapsed_seconds": round(task.get("elapsed", 0.0), 2),
                     "usage": task.get("usage", {}),
@@ -327,7 +327,7 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
         task_costs = _aggregate_costs_from_task_results(results_dir)
         if task_costs:
             api_cost = sum(t["api_cost"] for t in task_costs.values())
-            backend_cost = sum(t["backend_cost"] for t in task_costs.values())
+            sandbox_cost = sum(t["sandbox_cost"] for t in task_costs.values())
             total = sum(t["total_cost"] for t in task_costs.values())
             total_usage: dict[str, int] = {}
             for t in task_costs.values():
@@ -335,16 +335,16 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
                     total_usage[k] = total_usage.get(k, 0) + v
             breakdown["solver"] = {
                 "cli": cli,
-                "backend": backend,
+                "sandbox": sandbox,
                 "model": f"{model} (from task_results)",
                 "api_cost": round(api_cost, 4),
-                "backend_cost": round(backend_cost, 4),
+                "sandbox_cost": round(sandbox_cost, 4),
                 "total_cost": round(total, 4),
                 "usage": total_usage,
                 "per_task": {
                     task_id: {
                         "api_cost": round(t["api_cost"], 4),
-                        "backend_cost": round(t["backend_cost"], 4),
+                        "sandbox_cost": round(t["sandbox_cost"], 4),
                         "total_cost": round(t["total_cost"], 4),
                         "usage": t["usage"],
                     }
@@ -354,10 +354,10 @@ def extract_cost_breakdown(results_dir: Path, num_tasks: int) -> dict:
         else:
             breakdown["solver"] = {
                 "cli": cli,
-                "backend": backend,
+                "sandbox": sandbox,
                 "model": "N/A",
                 "api_cost": 0.0,
-                "backend_cost": 0.0,
+                "sandbox_cost": 0.0,
                 "total_cost": 0.0,
                 "usage": {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0},
                 "per_task": {},
@@ -375,10 +375,10 @@ def print_cost_report(cost_breakdown: dict) -> None:
     s = cost_breakdown["solver"]
     s_usage = s.get("usage", {})
     logger.info(f"\nCLI:      {s.get('cli', 'unknown')}")
-    logger.info(f"Backend:  {s.get('backend', 'unknown')}")
+    logger.info(f"Sandbox:  {s.get('sandbox', 'unknown')}")
     logger.info(f"Model:    {s['model']}")
     logger.info(f"  API Cost:      ${s['api_cost']:.4f}")
-    logger.info(f"  Backend Cost:  ${s['backend_cost']:.4f}")
+    logger.info(f"  Sandbox Cost:  ${s['sandbox_cost']:.4f}")
     logger.info(f"  TOTAL:         ${s['total_cost']:.4f}")
     if s_usage:
         logger.info(

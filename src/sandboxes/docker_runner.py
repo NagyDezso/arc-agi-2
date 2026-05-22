@@ -11,7 +11,7 @@ import aiodocker
 import docker
 from aiodocker.exceptions import DockerError
 
-from src.backends.base import BackendRunner
+from src.sandboxes.base import SandboxRunner
 from src.models import AgentConfig, AgentResultData, UsageTotals
 from src.orchestrator import ROOT, SESSION_LOG_FILENAME, TRANSCRIPT_FILENAME
 
@@ -22,7 +22,7 @@ DOCKER_CPU_COUNT = int(os.environ.get("ARC_SOLVER_DOCKER_CPUS", "1"))
 DOCKER_MEMORY = int(os.environ.get("ARC_SOLVER_DOCKER_MEMORY", "1")) * 1024 * 1024 * 1024
 
 
-class DockerRunner(BackendRunner):
+class DockerRunner(SandboxRunner):
     def _sanitize_container_name(self, name: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
         return cleaned[:63] if cleaned else "arc-agent"
@@ -42,7 +42,7 @@ class DockerRunner(BackendRunner):
     def setup(self, root_path: Path, cli_type: str) -> None:
         self._ensure_docker_image(root_path, cli_type)
 
-    async def start_agent_backend(
+    async def start_agent_sandbox(
         self,
         config: AgentConfig,
     ) -> AgentResultData:
@@ -110,8 +110,8 @@ class DockerRunner(BackendRunner):
 
             container_duration = time.time() - run_start
 
-            # Add backend metadata
-            result.backend_duration = container_duration
+            # Add sandbox metadata
+            result.sandbox_duration = container_duration
 
             logger.info(
                 f"[docker-cost] {config.agent_id}: API=${result.cost:.4f}, "
