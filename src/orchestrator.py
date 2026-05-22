@@ -154,6 +154,11 @@ def get_envs(cli_type: str) -> dict[str, str]:
         for key in os.environ:
             if key.startswith("JUNIE_"):
                 envs[key] = os.environ[key]
+    elif cli_type == "antigravity":
+        # Includes ANTIGRAVITY_OAUTH_* used to seed agy's auth token file.
+        for key in os.environ:
+            if key.startswith("ANTIGRAVITY_"):
+                envs[key] = os.environ[key]
     return envs
 
 
@@ -274,7 +279,13 @@ def _update_latest_run_link(run_dir: Path) -> None:
     try:
         latest.symlink_to(run_dir.name)
     except OSError:
-        logger.warning(f"Failed to create symlink: {latest} -> {run_dir.name}")
+        # Symlink creation can fail on Windows without admin rights or
+        # Developer Mode. Fall back to a plain text pointer file.
+        pointer = RESULTS / "latest.txt"
+        pointer.write_text(run_dir.name, encoding="utf-8")
+        logger.debug(
+            f"Symlink unavailable; wrote pointer file {pointer} -> {run_dir.name}"
+        )
 
 
 def _load_completed_tasks(run_dir: Path) -> list[TaskProcessResult]:

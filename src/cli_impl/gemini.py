@@ -23,6 +23,7 @@ _IGNORED_STDERR_SUBSTRINGS = (
 class GeminiCLI(BaseCLI):
     def __init__(self) -> None:
         self.PRICING = {
+            "gemini-3.5-flash": (1.50, 9.00, 0.15),
             "gemini-3-flash-preview": (0.50, 3.00, 0.05),
             "gemini-2.5-flash": (0.30, 2.50, 0.03),
             "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),

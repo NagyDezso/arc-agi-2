@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash curl ca-certificates gnupg jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Antigravity CLI installs the `agy` binary into ~/.local/bin.
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
+
+ENV PATH="/root/.local/bin:${PATH}"
+
+RUN pip install --no-cache-dir \
+    numpy \
+    scipy \
+    matplotlib \
+    pandas \
+    scikit-learn \
+    scikit-image \
+    pillow \
+    sympy \
+    networkx \
+    pydantic
+
+RUN mkdir -p /workspace /app
+
+WORKDIR /workspace
