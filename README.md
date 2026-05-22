@@ -1,16 +1,12 @@
 <div align="center">
 
-# Saturating ARC-AGI-2
-
-### [Confluence Labs](https://confluencelabs.com)
+# Unified ARC-AGI CLI Solver
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![ARC-AGI-2](https://img.shields.io/badge/Task-ARC--AGI--2-red.svg)](https://arcprize.org/)
 
-**97.92% on the ARC-AGI-2 public evaluation set.**
-
-<img src="arc-agi-2-public-eval.png" alt="Score vs Cost per Task on ARC-AGI-2 public evaluation set" width="700">
+**Solves [ARC-AGI-2](https://arcprize.org/) tasks by dispatching coding-agent CLIs into isolated sandboxes.**
 
 </div>
 
@@ -18,36 +14,103 @@
 
 ## Overview
 
-Code to reproduce Confluence Labs' state-of-the-art result on the [ARC-AGI-2](https://arcprize.org/) benchmark.
+This project solves ARC-AGI tasks by running AI coding-agent CLIs as solvers.
+For each task, multiple agents run in parallel inside isolated sandboxes; each
+agent writes and iteratively refines a Python `transform()` function against the
+training examples, then applies it to the test inputs.
+
+It started as a fork of Confluence Labs' ARC-AGI-2 solver and has been
+generalized into a unified harness with pluggable CLIs and sandboxes.
+
+**Supported solver CLIs:** `gemini`, `opencode`, `junie`
+**Supported sandboxes:** `docker` (local), `e2b` (remote)
 
 ## Quick Start
 
 ```bash
 # Install dependencies
-cd gemini-cli-solver && uv sync && cd ..
+uv sync
 
-# Configure
+# Configure credentials
 cp .env.example .env
-# Fill in E2B_API_KEY and GEMINI_API_KEY
+# Fill in the keys for the CLI/sandbox you intend to use
 
-# Full run
-./run.sh
+# Run directly
+uv run python main.py --tasks all --cli gemini --sandbox docker
 
 # Smoke test a single task
-./run.sh --smoke <task_id>
+uv run python main.py --tasks <task_id> --cli gemini --sandbox docker
+```
+
+Convenience wrappers reproduce full-run configurations with a 12-hour
+wall-clock circuit breaker and automatic submission building:
+
+```bash
+./run.sh                      # Gemini CLI solver
+./run.sh --smoke <task_id>    # single-task smoke test
+./run-opencode.sh             # OpenCode CLI solver
 ```
 
 ## Configuration
 
-The defaults in `run.sh` are the exact configuration that produced the 97.92% result. Adjust as needed:
+`main.py` options (see `--help` for the full list):
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `GEMINI_CLI_AGENTS` | 12 | Agents per test input |
-| `GEMINI_CLI_MAX_ITERATIONS` | 10 | Max refinement loops per agent |
-| `GEMINI_CLI_CONCURRENCY` | 132 | Max simultaneous sandboxes |
-| `WALL_CLOCK_LIMIT` | 43200 (12h) | Total wall clock timeout |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--tasks` | `all` | `all` or comma-separated task IDs |
+| `--cli` | `gemini` | Solver CLI: `gemini`, `opencode`, or `junie` |
+| `--sandbox` | `docker` | Execution sandbox: `docker` or `e2b` |
+| `--model` | `gemini-2.5-flash-lite` | Model name passed to the CLI |
+| `--num-agents` | 2 | Agents per test input |
+| `--max-iterations` | 5 | Max refinement loops per agent |
+| `--concurrency` | 2 | Max simultaneous agents |
+| `--whole-task` | off | One `transform()` shared across all test inputs |
+| `--name` | — | Name prefix for the results directory |
+| `--resume` | — | Resume a previous run directory |
+
+Credentials are read from `.env` (see `.env.example`). Each CLI/sandbox needs
+its own keys — e.g. `E2B_API_KEY` for the E2B sandbox, `GEMINI_API_KEY` for the
+Gemini CLI, `KILO_API_KEY` for OpenCode.
+
+## Building a Submission
+
+After a run, aggregate the results into a Kaggle-style `submission.json`:
+
+```bash
+python3 submission.py                    # gemini results
+python3 submission.py --solver opencode  # opencode results
+```
+
+## Project Layout
+
+```
+main.py            CLI entry point (typer)
+submission.py      Builds submission.json from run results
+run.sh             Full-run wrapper for the Gemini solver
+run-opencode.sh    Full-run wrapper for the OpenCode solver
+src/
+  orchestrator.py  Task loading, dispatch, logging, resume logic
+  agent_runner.py  Per-agent run loop
+  cli_impl/        CLI adapters: gemini, opencode, junie
+  sandboxes/       Sandbox runners: docker, e2b
+  Dockerfile.*     Container images per CLI
+data/              ARC-AGI evaluation challenges and solutions
+docs/              Thesis documentation
+tests/             unit / functional / integration tests
+```
+
+## Testing
+
+```bash
+uv run pytest
+```
+
+- **unit/** — single function or class in isolation; fast, no side effects
+- **functional/** — component workflows with mocked dependencies; fast
+- **integration/** — real external dependencies (Docker, APIs); have side effects
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+</content>
+</invoke>
