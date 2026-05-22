@@ -21,7 +21,7 @@ def main(
         5, "--max-iterations", help="Max transform loop iterations per agent (default: 5)"
     ),
     model: str = typer.Option(
-        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
         "--model",
         help="Model name (e.g., gemini-3.1-pro-preview, kilo/minimax/minimax-m2.5:free)",
     ),

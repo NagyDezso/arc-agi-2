@@ -12,10 +12,11 @@ from typing import Any, TextIO
 
 from src.models import UsageTotals
 
-from .base import BaseCLI, capture_raw_output_line, find_last_grid
+from .base import BaseCLI, capture_raw_output_line, find_last_grid, strip_ansi
 
 _IGNORED_STDERR_SUBSTRINGS = (
-    "YOLO mode is enabled. All tool calls will be automatically approved.\nLoaded cached credentials.\n"
+    "YOLO mode is enabled. All tool calls will be automatically approved.\n",
+    "Loaded cached credentials.\n",
 )
 
 
@@ -51,7 +52,10 @@ class GeminiCLI(BaseCLI):
                         }
                     }
                 },
-                "security": {"auth": {"selectedType": "oauth-personal"}},
+                "security": {
+                    "auth": {"selectedType": "oauth-personal"},
+                    "folderTrust": {"enabled": False},
+                },
             },
             indent=2,
         )
@@ -165,6 +169,7 @@ class GeminiCLI(BaseCLI):
             proc.wait()
             with contextlib.suppress(OSError):
                 stderr_text = proc.stderr.read()
+        stderr_text = strip_ansi(stderr_text)
         for ignored in _IGNORED_STDERR_SUBSTRINGS:
             stderr_text = stderr_text.replace(ignored, "")
         reader_thread.join(timeout=5)

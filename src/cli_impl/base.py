@@ -1,10 +1,19 @@
 import json
+import re
 from pathlib import Path
 from typing import Any, Protocol, TextIO, runtime_checkable
 
 from src.models import UsageTotals
 
 from .types import Event, EventType
+
+# Matches ANSI escape sequences (colors, cursor movement, etc.)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def strip_ansi(text: str) -> str:
+    """Removes ANSI escape sequences so terminal control codes don't mangle logs."""
+    return _ANSI_RE.sub("", text)
 
 
 def capture_raw_output_line(raw_lines: list[str], raw_line: str) -> dict[str, Any] | None:
