@@ -21,7 +21,6 @@ from typing import Any
 
 from docker.errors import DockerException
 
-from src.sandboxes import get_sandbox_runner
 from src.cli_impl import BaseCLI, get_cli_impl
 from src.logger import setup_logging
 from src.models import (
@@ -33,6 +32,7 @@ from src.models import (
     TaskProcessResult,
     TaskScore,
 )
+from src.sandboxes import get_sandbox_runner
 
 ROOT = Path(__file__).resolve().parent
 CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
@@ -117,24 +117,23 @@ def write_agent_logs(
         )
 
 
-def write_task_result(
-    run_dir: Path,
-    task_id: str,
-    agent_data: AgentResultData,
-) -> None:
-    task_results_dir = run_dir / "task_results"
-    task_results_dir.mkdir(exist_ok=True)
-    task_file = task_results_dir / f"{task_id}.json"
+# Auth env vars each CLI cannot run without.
+_REQUIRED_ENVS: dict[str, tuple[str, ...]] = {
+    "opencode": ("KILO_API_KEY",),
+    "gemini": ("GEMINI_OAUTH_ACCESS_TOKEN", "GEMINI_OAUTH_REFRESH_TOKEN", "GEMINI_OAUTH_ID_TOKEN"),
+    "junie": ("JUNIE_ACCESS_TOKEN", "JUNIE_REFRESH_TOKEN"),
+    "antigravity": ("ANTIGRAVITY_OAUTH_REFRESH_TOKEN",),
+}
 
-    if task_file.exists():
-        results = TaskProcessResult.model_validate_json(task_file.read_text(encoding="utf-8"))
-    else:
-        results = TaskProcessResult(task_id=task_id)
-    results.update_results(agent_data)
-    task_file.write_text(
-        json.dumps(results.model_dump(exclude=TASK_RESULT_JSON_EXCLUDE)),
-        encoding="utf-8",
-    )
+
+def check_required_envs(cli_type: str) -> None:
+    """Raises if the selected CLI is missing required auth env vars."""
+    missing = [key for key in _REQUIRED_ENVS.get(cli_type, ()) if not os.environ.get(key)]
+    if missing:
+        raise ValueError(
+            f"Missing required environment variable(s) for --cli {cli_type}: "
+            f"{', '.join(missing)}. Set them in .env (see .env.example)."
+        )
 
 
 def get_envs(cli_type: str) -> dict[str, str]:
@@ -199,9 +198,25 @@ def _build_agent_configs(
     return configs
 
 
+def _expected_agent_ids(task_id: str, raw_task: dict[str, Any], config: CliArgs) -> set[str]:
+    test_indexes = [0] if config.whole_task else list(range(len(raw_task["test"])))
+    ids: set[str] = set()
+    for test_index in test_indexes:
+        for ensemble_index in range(config.num_agents):
+            if config.whole_task:
+                ids.add(f"{task_id}_ens{ensemble_index}")
+            else:
+                ids.add(f"{task_id}_ens{ensemble_index}_t{test_index}")
+    return ids
+
+
+def _is_task_complete(result: TaskProcessResult, config: CliArgs) -> bool:
+    raw_task = load_task_json(result.task_id)
+    return _expected_agent_ids(result.task_id, raw_task, config).issubset(result.agents.keys())
+
+
 async def _run_agent_config(
     config: AgentConfig,
-    run_dir: Path,
     sandbox_semaphore: asyncio.Semaphore,
     context: OrchestrationContext,
 ) -> AgentResultData:
@@ -209,7 +224,6 @@ async def _run_agent_config(
         async with sandbox_semaphore:
             result = await context.sandbox_impl.start_agent_sandbox(config)
     except Exception as e:
-        # Create error result when sandbox fails - include empty attempt so it's recorded
         result = AgentResultData(
             task_id=config.task_id,
             agent_id=config.agent_id,
@@ -218,12 +232,6 @@ async def _run_agent_config(
         )
 
     write_agent_logs(result, config.task_id, config.log_dir, context.cli_impl)
-
-    write_task_result(
-        run_dir,
-        config.task_id,
-        result,
-    )
     return result
 
 
@@ -236,21 +244,25 @@ async def process_task(
 ) -> TaskProcessResult:
     raw_task = load_task_json(task_id)
     num_tests = len(raw_task["test"])
-    configs = _build_agent_configs(task_id, raw_task, run_dir, config)
+    all_configs = _build_agent_configs(task_id, raw_task, run_dir, config)
 
-    agent_results = await asyncio.gather(
-        *[_run_agent_config(config, run_dir, sandbox_semaphore, context) for config in configs],
-    )
-    result = TaskProcessResult(task_id=task_id)
-    for agent_result in agent_results:
-        result.update_results(agent_result)
+    task_file = run_dir / "task_results" / f"{task_id}.json"
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    if task_file.exists():
+        result = TaskProcessResult.model_validate_json(task_file.read_text(encoding="utf-8"))
+    else:
+        result = TaskProcessResult(task_id=task_id)
     result.score.total = num_tests
-    task_results_dir = run_dir / "task_results"
-    task_results_dir.mkdir(exist_ok=True)
-    (task_results_dir / f"{task_id}.json").write_text(
-        json.dumps(result.model_dump(exclude=TASK_RESULT_JSON_EXCLUDE)),
-        encoding="utf-8",
-    )
+    existing_ids = set(result.agents.keys())
+
+    configs_to_run = [c for c in all_configs if c.agent_id not in existing_ids]
+    for coro in asyncio.as_completed([_run_agent_config(c, sandbox_semaphore, context) for c in configs_to_run]):
+        agent_result = await coro
+        result.update_results(agent_result)
+        task_file.write_text(
+            json.dumps(result.model_dump(exclude=TASK_RESULT_JSON_EXCLUDE)),
+            encoding="utf-8",
+        )
     return result
 
 
@@ -283,9 +295,7 @@ def _update_latest_run_link(run_dir: Path) -> None:
         # Developer Mode. Fall back to a plain text pointer file.
         pointer = RESULTS / "latest.txt"
         pointer.write_text(run_dir.name, encoding="utf-8")
-        logger.debug(
-            f"Symlink unavailable; wrote pointer file {pointer} -> {run_dir.name}"
-        )
+        logger.debug(f"Symlink unavailable; wrote pointer file {pointer} -> {run_dir.name}")
 
 
 def _load_completed_tasks(run_dir: Path) -> list[TaskProcessResult]:
@@ -305,10 +315,11 @@ def _load_completed_tasks(run_dir: Path) -> list[TaskProcessResult]:
 def _select_remaining_task_ids(
     task_ids: list[str],
     completed_tasks: list[TaskProcessResult],
+    config: CliArgs,
     limit: int | None,
 ) -> list[str]:
-    completed_task_ids = [result.task_id for result in completed_tasks]
-    remaining_ids = [task_id for task_id in task_ids if task_id not in completed_task_ids]
+    fully_done_ids = {r.task_id for r in completed_tasks if _is_task_complete(r, config)}
+    remaining_ids = [task_id for task_id in task_ids if task_id not in fully_done_ids]
     if limit is not None:
         return remaining_ids[:limit]
     return remaining_ids
@@ -316,6 +327,7 @@ def _select_remaining_task_ids(
 
 def _accumulate_existing_scores(
     completed_tasks: list[TaskProcessResult],
+    config: CliArgs,
 ) -> tuple[dict[str, TaskScore], int, int, float]:
     all_scores: dict[str, TaskScore] = {}
     total_submitted = 0
@@ -323,6 +335,8 @@ def _accumulate_existing_scores(
     total_cost = 0.0
 
     for result in completed_tasks:
+        if not _is_task_complete(result, config):
+            continue
         score = result.score
         all_scores[result.task_id] = score
         total_submitted += score.submitted
@@ -333,6 +347,7 @@ def _accumulate_existing_scores(
 
 
 async def run_all(args: CliArgs) -> None:
+    check_required_envs(args.cli)
     task_ids = load_task_ids(args.tasks)
     run_dir = _resolve_run_dir(args)
     if run_dir is None:
@@ -355,16 +370,18 @@ async def run_all(args: CliArgs) -> None:
     logger.debug(f"Run directory: {run_dir}")
 
     completed_tasks = _load_completed_tasks(run_dir)
+    fully_done_count = sum(1 for r in completed_tasks if _is_task_complete(r, args))
+    partial_count = len(completed_tasks) - fully_done_count
     if completed_tasks:
-        logger.info(f"Found {len(completed_tasks)} already-completed tasks, skipping them")
+        logger.info(
+            f"Found {fully_done_count} fully-completed tasks, {partial_count} partial (will resume missing agents)"
+        )
 
-    remaining_ids = _select_remaining_task_ids(task_ids, completed_tasks, args.limit)
-    logger.info(
-        f"Running {len(remaining_ids)} tasks ({len(task_ids) - len(completed_tasks) - len(remaining_ids)} skipped)"
-    )
+    remaining_ids = _select_remaining_task_ids(task_ids, completed_tasks, args, args.limit)
+    logger.info(f"Running {len(remaining_ids)} tasks ({len(task_ids) - fully_done_count - len(remaining_ids)} skipped)")
 
-    all_scores, total_submitted, total_tests, total_cost = _accumulate_existing_scores(completed_tasks)
-    completed = len(completed_tasks)
+    all_scores, total_submitted, total_tests, total_cost = _accumulate_existing_scores(completed_tasks, args)
+    completed = fully_done_count
     sandbox_semaphore = asyncio.Semaphore(args.concurrency)
 
     async def process_and_report(task_id: str) -> None:
@@ -374,6 +391,14 @@ async def run_all(args: CliArgs) -> None:
         except Exception:
             completed += 1
             logger.exception(f"[{completed}/{len(task_ids)}] CRASH {task_id}")
+            return
+
+        if not _is_task_complete(result, args):
+            completed += 1
+            logger.warning(
+                f"[{completed}/{len(task_ids)}] PARTIAL {task_id} "
+                f"({len(result.agents)} agents persisted; missing ones will retry on --resume)"
+            )
             return
 
         score = result.score

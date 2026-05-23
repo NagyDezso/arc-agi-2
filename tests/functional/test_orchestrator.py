@@ -17,7 +17,13 @@ from src.models import (
     TaskScore,
     UsageTotals,
 )
-from src.orchestrator import SESSION_LOG_FILENAME, TRANSCRIPT_FILENAME, process_task, run_all
+from src.orchestrator import (
+    SESSION_LOG_FILENAME,
+    TRANSCRIPT_FILENAME,
+    check_required_envs,
+    process_task,
+    run_all,
+)
 
 
 class SequenceSandbox(SandboxRunner):
@@ -466,7 +472,8 @@ async def test_process_task_respects_sandbox_semaphore_concurrency_limit(tmp_pat
 
 @pytest.mark.asyncio
 @pytest.mark.functional
-async def test_run_all_skips_completed_tasks_and_writes_summary(tmp_path: Path, mock_cli_impl) -> None:
+async def test_run_all_skips_completed_tasks_and_writes_summary(tmp_path: Path, mock_cli_impl, monkeypatch) -> None:
+    monkeypatch.setenv("KILO_API_KEY", "test-key")
     results_dir = tmp_path / "results"
     resume_dir = results_dir / "resume_run"
     task_results_dir = resume_dir / "task_results"
@@ -565,7 +572,8 @@ async def test_run_all_skips_completed_tasks_and_writes_summary(tmp_path: Path, 
                 ):
                     with patch("src.orchestrator.setup_logging"):
                         with patch("src.orchestrator.process_task", side_effect=fake_process_task):
-                            await run_all(args)
+                            with patch("src.orchestrator._is_task_complete", return_value=True):
+                                await run_all(args)
 
     assert processed == ["task_b"]
 
@@ -580,7 +588,8 @@ async def test_run_all_skips_completed_tasks_and_writes_summary(tmp_path: Path, 
 
 @pytest.mark.asyncio
 @pytest.mark.functional
-async def test_run_all_continues_after_process_task_crash(tmp_path: Path, mock_cli_impl) -> None:
+async def test_run_all_continues_after_process_task_crash(tmp_path: Path, mock_cli_impl, monkeypatch) -> None:
+    monkeypatch.setenv("KILO_API_KEY", "test-key")
     results_dir = tmp_path / "results"
     results_dir.mkdir()
     run_dir = results_dir / "testrun_stamp"
@@ -626,6 +635,7 @@ async def test_run_all_continues_after_process_task_crash(tmp_path: Path, mock_c
         patch("src.orchestrator.setup_logging"),
         patch("src.orchestrator.process_task", side_effect=fake_process_task),
         patch("src.orchestrator.random.shuffle", side_effect=lambda items: None),
+        patch("src.orchestrator._is_task_complete", return_value=True),
         patch("src.orchestrator.datetime") as mock_datetime,
     ):
         mock_datetime.now.return_value.strftime.return_value = "stamp"
@@ -690,3 +700,28 @@ async def test_process_task_integration(tmp_path, mock_raw_task_file, mock_cli_i
 
     readable_content = (log_dir / "readable.md").read_text()
     assert "Parsed readable:" in readable_content
+
+
+def test_check_required_envs_raises_when_token_missing(monkeypatch):
+    monkeypatch.delenv("ANTIGRAVITY_OAUTH_REFRESH_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="ANTIGRAVITY_OAUTH_REFRESH_TOKEN"):
+        check_required_envs("antigravity")
+
+
+def test_check_required_envs_raises_when_token_empty(monkeypatch):
+    # A var present but blank (e.g. `KEY=` in .env) counts as missing.
+    monkeypatch.setenv("ANTIGRAVITY_OAUTH_REFRESH_TOKEN", "")
+    with pytest.raises(ValueError, match="ANTIGRAVITY_OAUTH_REFRESH_TOKEN"):
+        check_required_envs("antigravity")
+
+
+def test_check_required_envs_passes_when_token_present(monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_OAUTH_REFRESH_TOKEN", "1//0refresh")
+    check_required_envs("antigravity")
+
+
+def test_check_required_envs_lists_all_missing_gemini_vars(monkeypatch):
+    for key in ("GEMINI_OAUTH_ACCESS_TOKEN", "GEMINI_OAUTH_REFRESH_TOKEN", "GEMINI_OAUTH_ID_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    with pytest.raises(ValueError, match="GEMINI_OAUTH_ID_TOKEN"):
+        check_required_envs("gemini")

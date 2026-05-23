@@ -1,33 +1,43 @@
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
+import time
+import uuid
 from pathlib import Path
 from typing import TextIO
 
 from src.models import UsageTotals
 
 from .base import BaseCLI, capture_raw_output_line, find_last_grid, strip_ansi
+from .types import Event, EventType
 
 _DATA_DIR = Path("/root/.gemini/antigravity-cli")
-# OAuth token file agy reads on startup.
-_TOKEN_FILE = _DATA_DIR / "antigravity-oauth-token"
-# Each conversation dir holds a structured JSONL transcript we parse.
-_BRAIN_DIR = _DATA_DIR / "brain"
-_TRANSCRIPT_GLOB = "*/.system_generated/logs/transcript.jsonl"
 # agy's settings.json `model` field expects a human-readable display name with
-# a reasoning level, not the API id. Only the first entry is verified against a
-# real install; others are best-effort and may need correcting.
+# a reasoning level, not the API id.
 _MODEL_DISPLAY_NAMES = {
     "gemini-3.5-flash": "Gemini 3.5 Flash (Medium)",
     "claude-sonnet-4-6": "Claude Sonnet 4.6 (Thinking)",
 }
-# Wall-clock cap on a single `agy --print` invocation.
 _SESSION_TIMEOUT_SECONDS = 10800
 # Passed to `agy --print-timeout` (Go duration); keep it >= the wall-clock cap.
 _PRINT_TIMEOUT = "180m"
+# `agy --print` exits silently on quota exhaustion; any run finishing this fast
+# with no output is treated as a silent failure.
+_QUOTA_SILENT_FAILURE_S = 15.0
+# Extra slack on top of the parsed reset window, in case clocks/quotas lag.
+_QUOTA_COOLDOWN_HEADROOM_S = 120
+# Used when the agy log doesn't expose a parseable "Resets in ..." line.
+_QUOTA_FALLBACK_RESET_S = 5 * 3600
+# Safety bound so a misdetected silent failure can't spin forever.
+_MAX_QUOTA_RETRIES = 3
+_QUOTA_RESET_RE = re.compile(
+    r"Resets in\s+(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?",
+    re.IGNORECASE,
+)
 
 
 class AntigravityCLI(BaseCLI):
@@ -41,13 +51,10 @@ class AntigravityCLI(BaseCLI):
     ``transcript.jsonl`` files under that same tree; this adapter drives ``agy``
     and then parses the transcript for tool calls, assistant text and the final
     grid. Token usage is not recorded there, so the reported cost is 0.
-
-    See https://antigravity.google/docs/cli-getting-started
     """
 
     def __init__(self) -> None:
-        # Antigravity drives the Gemini model family; rates are USD per 1M
-        # tokens as (input, output, cached).
+        # USD per 1M tokens: (input, output, cached).
         self.PRICING = {
             "gemini-3.5-flash": (1.50, 9.00, 0.15),
             "gemini-3-flash-preview": (0.50, 3.00, 0.05),
@@ -56,14 +63,26 @@ class AntigravityCLI(BaseCLI):
             "gemini-2.5-pro": (1.25, 10.00, 0.125),
             "claude-sonnet-4-6": (3.00, 15.00, 0.30),
         }
-        # transcript path -> number of lines already consumed, so each
-        # run_session call only reports events appended since the last one.
         self._transcript_offsets: dict[str, int] = {}
 
     def workspace_extras(self, model: str) -> None:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        onboarding_file = _DATA_DIR / "cache" / "onboarding.json"
+        token_file = _DATA_DIR / "antigravity-oauth-token"
+        # Skip agy's first-run wizard (color scheme, ToS, telemetry opt-in)
+        # that would otherwise block the headless --print invocation.
+        onboarding_file.parent.mkdir(parents=True, exist_ok=True)
+        onboarding_file.write_text(
+            json.dumps(
+                {
+                    "consumerOnboardingComplete": True,
+                    "enterpriseOnboardingComplete": False,
+                    "onboardingComplete": True,
+                }
+            )
+        )
         # Past expiry makes agy refresh from the refresh token on first use.
-        _TOKEN_FILE.write_text(
+        token_file.write_text(
             json.dumps(
                 {
                     "token": {
@@ -76,7 +95,7 @@ class AntigravityCLI(BaseCLI):
                 }
             )
         )
-        _TOKEN_FILE.chmod(0o600)
+        token_file.chmod(0o600)
         # `agy` has no --model flag; the model is pinned via settings.json.
         (_DATA_DIR / "settings.json").write_text(
             json.dumps(
@@ -90,12 +109,51 @@ class AntigravityCLI(BaseCLI):
             )
         )
 
+    def _emit_status(self, message: str, *, level: str = "info") -> None:
+        print(
+            Event(type=EventType.STATUS, message=f"[{self.agent_id}] {message}", level=level).model_dump_json(),
+            flush=True,
+        )
+
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
     ) -> tuple[list[str], int, str, UsageTotals]:
         base_path = shutil.which("agy")
         if not base_path:
             return [], 0, "agy executable not found in PATH", UsageTotals()
+
+        for attempt in range(_MAX_QUOTA_RETRIES + 1):
+            raw_lines, num_turns, stderr_text, quota_reset_s = self._invoke_agy(
+                base_path, ws_path, initial_prompt, feedback, iteration
+            )
+            if quota_reset_s is None or attempt == _MAX_QUOTA_RETRIES:
+                return raw_lines, num_turns, stderr_text, UsageTotals()
+            cooldown_s = quota_reset_s + _QUOTA_COOLDOWN_HEADROOM_S
+            self._emit_status(
+                f"agy quota exhausted; sleeping {cooldown_s}s in-process "
+                f"(attempt {attempt + 1}/{_MAX_QUOTA_RETRIES}) before retrying"
+            )
+            time.sleep(cooldown_s)
+        return [], 0, "", UsageTotals()  # unreachable
+
+    def _invoke_agy(
+        self,
+        base_path: str,
+        ws_path: Path,
+        initial_prompt: str,
+        feedback: str,
+        iteration: int,
+    ) -> tuple[list[str], int, str, int | None]:
+        """One agy --print invocation.
+
+        Returns ``(raw_lines, num_turns, stderr_text, quota_reset_s)``. A non-None
+        ``quota_reset_s`` indicates a silent quota failure and is the number of
+        seconds until the quota resets (falls back to :data:`_QUOTA_FALLBACK_RESET_S`
+        when the log doesn't expose a parseable window).
+        """
+        log_dir = _DATA_DIR / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"orchestrator-{uuid.uuid4().hex}.log"
 
         # Without --add-dir, agy ignores the cwd and works in its own private
         # scratch directory, so transform.py would never land in ws_path.
@@ -104,6 +162,8 @@ class AntigravityCLI(BaseCLI):
             "--dangerously-skip-permissions",
             "--print-timeout",
             _PRINT_TIMEOUT,
+            "--log-file",
+            str(log_path),
             "--add-dir",
             str(ws_path),
         ]
@@ -121,16 +181,38 @@ class AntigravityCLI(BaseCLI):
             text=True,
             start_new_session=True,  # isolate process group so we can kill the whole tree
         )
+        start = time.monotonic()
         try:
-            _, stderr_text = proc.communicate(timeout=_SESSION_TIMEOUT_SECONDS)
+            stdout_text, stderr_text = proc.communicate(timeout=_SESSION_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            _, stderr_text = proc.communicate()
+            stdout_text, stderr_text = proc.communicate()
+        elapsed = time.monotonic() - start
 
         raw_lines, num_turns = self._collect_new_transcript_events()
-        # Token usage is absent from the transcript, so cost cannot be computed.
-        return raw_lines, num_turns, strip_ansi(stderr_text or ""), UsageTotals()
+        stderr_text = strip_ansi(stderr_text or "")
+        stdout_text = strip_ansi(stdout_text or "")
+
+        silent = (
+            num_turns == 0
+            and not raw_lines
+            and not stdout_text.strip()
+            and not stderr_text.strip()
+            and elapsed < _QUOTA_SILENT_FAILURE_S
+        )
+        if not silent:
+            return raw_lines, num_turns, stderr_text, None
+
+        reset_seconds, probe_debug = self._probe_quota_reset_seconds(log_path)
+        if reset_seconds is not None:
+            return raw_lines, num_turns, stderr_text, reset_seconds
+        self._emit_status(
+            f"agy exited silently after {elapsed:.1f}s but the reset window could "
+            f"not be parsed; using fallback {_QUOTA_FALLBACK_RESET_S}s. "
+            f"[log tail (last 4KB of {log_path.name})]\n{probe_debug or '(empty)'}"
+        )
+        return raw_lines, num_turns, stderr_text, _QUOTA_FALLBACK_RESET_S
 
     def _collect_new_transcript_events(self) -> tuple[list[str], int]:
         """Reads transcript lines appended since the previous call.
@@ -140,11 +222,12 @@ class AntigravityCLI(BaseCLI):
         """
         raw_lines: list[str] = []
         num_turns = 0
-        if not _BRAIN_DIR.is_dir():
+        brain_dir = _DATA_DIR / "brain"
+        if not brain_dir.is_dir():
             return raw_lines, num_turns
 
         transcripts = sorted(
-            _BRAIN_DIR.glob(_TRANSCRIPT_GLOB),
+            brain_dir.glob("*/.system_generated/logs/transcript.jsonl"),
             key=lambda p: p.stat().st_mtime,
         )
         for path in transcripts:
@@ -176,6 +259,26 @@ class AntigravityCLI(BaseCLI):
                     # A submitted grid may sit in a write/run tool's arguments.
                     blobs.append(json.dumps(tool_call.get("args", {})))
         return find_last_grid("\n".join(blobs))
+
+    def _probe_quota_reset_seconds(self, log_path: Path) -> tuple[int | None, str]:
+        """Parse "Resets in Xh Ym Zs" from agy's RESOURCE_EXHAUSTED log line."""
+        try:
+            content = log_path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return None, f"(log file not found: {log_path})"
+        except OSError as exc:
+            return None, f"(failed to read log {log_path}: {exc})"
+
+        for line in content.splitlines():
+            if "RESOURCE_EXHAUSTED" not in line:
+                continue
+            match = _QUOTA_RESET_RE.search(line)
+            if match:
+                hours = int(match.group(1) or 0)
+                minutes = int(match.group(2) or 0)
+                seconds = int(match.group(3) or 0)
+                return hours * 3600 + minutes * 60 + seconds, line.strip()
+        return None, content[-4096:]
 
     def write_readable_log(self, rf: TextIO, obj: dict) -> None:
         evt_type = str(obj.get("type", ""))

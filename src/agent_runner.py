@@ -38,7 +38,6 @@ FATAL_ERRORS = [
     "The model is not supported",
     "Access denied",
     "API key not valid",
-    "QuotaExceeded",
 ]
 
 
@@ -341,6 +340,7 @@ def main() -> None:
     config = AgentConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
     config_path.unlink()
     cli = get_cli_impl(config.cli_type)
+    cli.agent_id = config.agent_id
     result = run_agent(config, cli)
     results_path = Path("/workspace/results.json")
     results_path.write_text(result.model_dump_json(), encoding="utf-8")

@@ -151,8 +151,8 @@ def test_antigravity_write_readable_log_renders_event_types():
 
 
 def test_antigravity_collect_transcript_events_tracks_offsets(tmp_path, monkeypatch):
+    monkeypatch.setattr(antigravity_mod, "_DATA_DIR", tmp_path)
     brain = tmp_path / "brain"
-    monkeypatch.setattr(antigravity_mod, "_BRAIN_DIR", brain)
     cli = AntigravityCLI()
 
     log_dir = brain / "session-1" / ".system_generated" / "logs"
@@ -185,7 +185,7 @@ def test_antigravity_collect_transcript_events_tracks_offsets(tmp_path, monkeypa
 
 
 def test_antigravity_collect_transcript_events_no_brain_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(antigravity_mod, "_BRAIN_DIR", tmp_path / "missing")
+    monkeypatch.setattr(antigravity_mod, "_DATA_DIR", tmp_path / "missing")
     cli = AntigravityCLI()
     assert cli._collect_new_transcript_events() == ([], 0)
 
@@ -193,7 +193,6 @@ def test_antigravity_collect_transcript_events_no_brain_dir(tmp_path, monkeypatc
 def _patch_data_dir(monkeypatch, tmp_path):
     data_dir = tmp_path / ".gemini" / "antigravity-cli"
     monkeypatch.setattr(antigravity_mod, "_DATA_DIR", data_dir)
-    monkeypatch.setattr(antigravity_mod, "_TOKEN_FILE", data_dir / "antigravity-oauth-token")
     return data_dir
 
 
@@ -228,6 +227,49 @@ def test_antigravity_workspace_extras_writes_oauth_token(tmp_path, monkeypatch):
     assert creds["token"]["expiry"] == "2000-01-01T00:00:00Z"
     # Credentials file must not be world-readable.
     assert (token_path.stat().st_mode & 0o077) == 0
+
+
+def test_antigravity_probe_parses_resets_in_from_log_file(tmp_path):
+    cli = AntigravityCLI()
+    log_path = tmp_path / "agy.log"
+    log_path.write_text(
+        "I0523 17:12:59.230 282438 printmode.go:130] Print mode: conversation=x, sending message\n"
+        "E0523 17:12:59.572 282438 log.go:398] agent executor error: RESOURCE_EXHAUSTED "
+        "(code 429): Individual quota reached. Contact your administrator to enable "
+        "overages. Resets in 3h45m34s.: RESOURCE_EXHAUSTED (code 429): Individual quota "
+        "reached. Contact your administrator to enable overages. Resets in 3h45m34s.\n"
+    )
+    reset, debug = cli._probe_quota_reset_seconds(log_path)
+    assert reset == 3 * 3600 + 45 * 60 + 34
+    assert "RESOURCE_EXHAUSTED" in debug
+
+
+def test_antigravity_probe_parses_seconds_only_reset(tmp_path):
+    cli = AntigravityCLI()
+    log_path = tmp_path / "agy.log"
+    log_path.write_text(
+        "E0523 20:58:14.508 519609 log.go:398] agent executor error: RESOURCE_EXHAUSTED "
+        "(code 429): Individual quota reached. Resets in 20s.\n"
+    )
+    reset, _ = cli._probe_quota_reset_seconds(log_path)
+    assert reset == 20
+
+
+def test_antigravity_probe_returns_none_when_log_missing(tmp_path):
+    cli = AntigravityCLI()
+    reset, debug = cli._probe_quota_reset_seconds(tmp_path / "nope.log")
+    assert reset is None
+    assert "not found" in debug
+
+
+def test_antigravity_probe_returns_none_when_no_quota_line(tmp_path):
+    cli = AntigravityCLI()
+    log_path = tmp_path / "agy.log"
+    log_path.write_text("I0523 ... CLI ready\nI0523 ... shutting down\n")
+    reset, debug = cli._probe_quota_reset_seconds(log_path)
+    assert reset is None
+    # Falls back to returning the log tail for diagnostics.
+    assert "shutting down" in debug
 
 
 def test_antigravity_cost_uses_gemini_3_5_flash_pricing():

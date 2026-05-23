@@ -7,8 +7,10 @@ from src.models import UsageTotals
 
 from .types import Event, EventType
 
-# Matches ANSI escape sequences (colors, cursor movement, etc.)
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# Matches ANSI CSI sequences. Parameter bytes are the full 0x30-0x3F range
+# (covers digits, `:;<=>?` — the latter four are private-use prefixes that
+# agy and similar TUIs emit, e.g. \x1b[>4;2m).
+_ANSI_RE = re.compile(r"\x1b\[[\x30-\x3f]*[ -/]*[@-~]")
 
 
 def strip_ansi(text: str) -> str:
@@ -65,6 +67,7 @@ def find_last_grid(text: str) -> list[list[int]] | None:
 @runtime_checkable
 class BaseCLI(Protocol):
     PRICING: dict[str, tuple[float, float, float]]
+    agent_id: str
 
     def workspace_extras(self, model: str) -> None:
         """Applies implementation-specific workspace setup (e.g., settings.json)."""

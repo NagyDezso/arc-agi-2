@@ -18,7 +18,6 @@ from src.models import AgentConfig, UsageTotals
         "Error: ModelNotFoundError: Requested entity was not found.",
         "Error: Invalid model name provided.",
         "Requested entity was not found",
-        "QuotaExceeded",
         "Access denied",
     ],
 )
