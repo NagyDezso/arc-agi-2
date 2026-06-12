@@ -212,6 +212,94 @@ def test_antigravity_workspace_extras_writes_settings(tmp_path, monkeypatch):
     assert settings["model"] == "some-other-model"
 
 
+def test_antigravity_workspace_extras_registers_statusline(tmp_path, monkeypatch):
+    data_dir = _patch_data_dir(monkeypatch, tmp_path)
+    # A stale usage log from a previous run must be cleared on setup.
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "usage.jsonl").write_text("stale\n")
+    cli = AntigravityCLI()
+
+    cli.workspace_extras("gemini-3.5-flash")
+
+    settings = json.loads((data_dir / "settings.json").read_text())
+    script_path = data_dir / "statusline-usage.sh"
+    assert settings["statusLine"] == {
+        "type": "command",
+        "command": str(script_path),
+        "enabled": True,
+    }
+    # The script appends stdin to the usage log and is executable.
+    assert str(data_dir / "usage.jsonl") in script_path.read_text()
+    assert script_path.stat().st_mode & 0o111
+    assert not (data_dir / "usage.jsonl").exists()
+
+
+def _usage_payload(input_tokens, output_tokens, *, cache_read=0, cache_creation=0):
+    return json.dumps(
+        {
+            "context_window": {
+                "current_usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_creation_input_tokens": cache_creation,
+                    "cache_read_input_tokens": cache_read,
+                }
+            }
+        }
+    )
+
+
+def test_antigravity_collect_usage_groups_streaming_snapshots(tmp_path, monkeypatch):
+    data_dir = _patch_data_dir(monkeypatch, tmp_path)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    usage_log = data_dir / "usage.jsonl"
+    # Two requests. The first streams (output climbs 10 -> 40 at constant input),
+    # then the second request changes the input and adds a cache read.
+    usage_log.write_text(
+        "\n".join(
+            [
+                json.dumps({"context_window": {"current_usage": None}}),  # authenticating
+                _usage_payload(1000, 10),
+                _usage_payload(1000, 25),
+                _usage_payload(1000, 40),
+                _usage_payload(2000, 5, cache_read=500, cache_creation=100),
+                _usage_payload(2000, 30, cache_read=500, cache_creation=100),
+            ]
+        )
+        + "\n"
+    )
+    cli = AntigravityCLI()
+
+    usage = cli._collect_usage()
+
+    # input = 1000 + (2000 + 100 creation); output = 40 + 30; cached = 500.
+    assert usage.input_tokens == 3100
+    assert usage.output_tokens == 70
+    assert usage.cached_tokens == 500
+
+
+def test_antigravity_collect_usage_tracks_offset(tmp_path, monkeypatch):
+    data_dir = _patch_data_dir(monkeypatch, tmp_path)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    usage_log = data_dir / "usage.jsonl"
+    cli = AntigravityCLI()
+
+    usage_log.write_text(_usage_payload(1000, 40) + "\n")
+    first = cli._collect_usage()
+    assert (first.input_tokens, first.output_tokens) == (1000, 40)
+
+    # A second invocation only counts payloads appended since the last read.
+    with usage_log.open("a") as fh:
+        fh.write(_usage_payload(2000, 50) + "\n")
+    second = cli._collect_usage()
+    assert (second.input_tokens, second.output_tokens) == (2000, 50)
+
+
+def test_antigravity_collect_usage_missing_log(tmp_path, monkeypatch):
+    _patch_data_dir(monkeypatch, tmp_path)
+    assert AntigravityCLI()._collect_usage() == UsageTotals()
+
+
 def test_antigravity_workspace_extras_writes_oauth_token(tmp_path, monkeypatch):
     data_dir = _patch_data_dir(monkeypatch, tmp_path)
     monkeypatch.setenv("ANTIGRAVITY_OAUTH_REFRESH_TOKEN", "refresh-xyz")

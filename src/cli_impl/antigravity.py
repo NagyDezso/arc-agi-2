@@ -16,6 +16,11 @@ from .base import BaseCLI, capture_raw_output_line, find_last_grid, strip_ansi
 from .types import Event, EventType
 
 _DATA_DIR = Path("/root/.gemini/antigravity-cli")
+# Token usage is surfaced only through the statusline hook: agy pipes a JSON
+# payload to the statusline command on every render, and that script appends it
+# to the usage log. Both live under _DATA_DIR (resolved at call time).
+_USAGE_LOG_NAME = "usage.jsonl"
+_STATUSLINE_SCRIPT_NAME = "statusline-usage.sh"
 # agy's settings.json `model` field expects a human-readable display name with
 # a reasoning level, not the API id.
 _MODEL_DISPLAY_NAMES = {
@@ -51,7 +56,9 @@ class AntigravityCLI(BaseCLI):
     and the real structured record lives in the per-conversation
     ``transcript.jsonl`` files under that same tree; this adapter drives ``agy``
     and then parses the transcript for tool calls, assistant text and the final
-    grid. Token usage is not recorded there, so the reported cost is 0.
+    grid. Token usage is not recorded in the transcript, but the statusline hook
+    (configured in :meth:`workspace_extras`) does expose per-request counts, so
+    cost is reconstructed from the usage log it writes.
     """
 
     def __init__(self) -> None:
@@ -66,6 +73,7 @@ class AntigravityCLI(BaseCLI):
             "claude-sonnet-4-6": (3.00, 15.00, 0.30),
         }
         self._transcript_offsets: dict[str, int] = {}
+        self._usage_offset = 0
 
     def workspace_extras(self, model: str) -> None:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -98,12 +106,26 @@ class AntigravityCLI(BaseCLI):
             )
         )
         token_file.chmod(0o600)
+        # agy pipes a statusline JSON payload to this command on stdin on every
+        # render; appending it to the usage log is the only way to capture
+        # per-request token counts in --print mode.
+        usage_log = _DATA_DIR / _USAGE_LOG_NAME
+        statusline_script = _DATA_DIR / _STATUSLINE_SCRIPT_NAME
+        statusline_script.write_text(f'#!/bin/sh\n{{ cat; printf "\\n"; }} >> "{usage_log}"\n')
+        statusline_script.chmod(0o755)
+        usage_log.unlink(missing_ok=True)
+        self._usage_offset = 0
         # `agy` has no --model flag; the model is pinned via settings.json.
         (_DATA_DIR / "settings.json").write_text(
             json.dumps(
                 {
                     "enableTelemetry": False,
                     "model": _MODEL_DISPLAY_NAMES.get(model, model),
+                    "statusLine": {
+                        "type": "command",
+                        "command": str(statusline_script),
+                        "enabled": True,
+                    },
                     # Pre-trust the sandbox workspace so agy never prompts.
                     "trustedWorkspaces": ["/workspace"],
                 },
@@ -129,7 +151,7 @@ class AntigravityCLI(BaseCLI):
                 base_path, ws_path, initial_prompt, feedback, iteration
             )
             if quota_reset_s is None or attempt == _MAX_QUOTA_RETRIES:
-                return raw_lines, num_turns, stderr_text, UsageTotals()
+                return raw_lines, num_turns, stderr_text, self._collect_usage()
             cooldown_s = quota_reset_s + _QUOTA_COOLDOWN_HEADROOM_S
             self._emit_status(
                 f"agy quota exhausted; sleeping {cooldown_s}s in-process "
@@ -244,6 +266,53 @@ class AntigravityCLI(BaseCLI):
                     num_turns += len(obj["tool_calls"])
             self._transcript_offsets[str(path)] = len(lines)
         return raw_lines, num_turns
+
+    def _collect_usage(self) -> UsageTotals:
+        """Reconstruct billed token usage from statusline payloads since the last call.
+
+        agy re-emits the same ``current_usage`` on every render while a request
+        streams, with ``output_tokens`` climbing until the response completes and
+        ``input_tokens`` constant. Consecutive payloads sharing the same input are
+        therefore one request; its final (max) output is the billed amount. A change
+        in the input counts marks the next request.
+        """
+        try:
+            lines = (_DATA_DIR / _USAGE_LOG_NAME).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return UsageTotals()
+        start, self._usage_offset = self._usage_offset, len(lines)
+
+        groups: list[list] = []  # [(input, cache_creation, cache_read), max_output]
+        for line in lines[start:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            usage = (obj.get("context_window") or {}).get("current_usage")
+            if not isinstance(usage, dict):
+                continue
+            key = (
+                int(usage.get("input_tokens") or 0),
+                int(usage.get("cache_creation_input_tokens") or 0),
+                int(usage.get("cache_read_input_tokens") or 0),
+            )
+            out = int(usage.get("output_tokens") or 0)
+            if groups and groups[-1][0] == key:
+                groups[-1][1] = max(groups[-1][1], out)
+            else:
+                groups.append([key, out])
+
+        totals = UsageTotals()
+        for (inp, creation, cached), out in groups:
+            totals += UsageTotals(
+                input_tokens=inp + creation,
+                cached_tokens=cached,
+                output_tokens=out,
+            )
+        return totals
 
     def extract_grid_from_output(self, raw_lines: list[str]) -> list[list[int]] | None:
         blobs: list[str] = []
