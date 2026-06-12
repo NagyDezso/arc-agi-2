@@ -20,6 +20,7 @@ _DATA_DIR = Path("/root/.gemini/antigravity-cli")
 # a reasoning level, not the API id.
 _MODEL_DISPLAY_NAMES = {
     "gemini-3.5-flash": "Gemini 3.5 Flash (Medium)",
+    "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
     "claude-sonnet-4-6": "Claude Sonnet 4.6 (Thinking)",
 }
 _SESSION_TIMEOUT_SECONDS = 10800
@@ -57,6 +58,7 @@ class AntigravityCLI(BaseCLI):
         # USD per 1M tokens: (input, output, cached).
         self.PRICING = {
             "gemini-3.5-flash": (1.50, 9.00, 0.15),
+            "gemini-3.5-flash-high": (1.50, 9.00, 0.15),
             "gemini-3-flash-preview": (0.50, 3.00, 0.05),
             "gemini-2.5-flash": (0.30, 2.50, 0.03),
             "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),

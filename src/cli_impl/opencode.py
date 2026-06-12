@@ -21,6 +21,8 @@ class OpenCodeCLI(BaseCLI):
         self.PRICING = {
             "kilo/minimax/minimax-m2.5": (0.29, 1.20, 0.00),
             "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
+            "opencode/deepseek-v4-flash-free": (0.10, 0.20, 0.02),
+            "opencode/mimo-v2.5-free": (0.14, 0.28, 0.0028),
         }
 
     def workspace_extras(self, model: str) -> None:

@@ -106,7 +106,7 @@ class DockerRunner(SandboxRunner):
 
             await container.wait(timeout=3600)
             results_path = run_root / "results.json"
-            result = AgentResultData.model_validate_json(results_path.read_text())
+            result = AgentResultData.model_validate_json(results_path.read_text(encoding="utf-8"))
 
             container_duration = time.time() - run_start
 
