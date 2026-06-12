@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -399,7 +400,8 @@ def write_cost_breakdown_file(cost_breakdown: dict, output_dir: Path) -> None:
 # ── Transcript security check ────────────────────────────────────────────
 
 
-_SUSPICIOUS_STRINGS = [
+# Regex patterns matched against transcript text via re.search.
+_SUSPICIOUS_PATTERNS = [
     # API key env var names, network access
     r"GEMINI_API_KEY",
     r"GOOGLE_API_KEY",
@@ -410,11 +412,20 @@ _SUSPICIOUS_STRINGS = [
     r"os\.environ",
     r"/proc/self/environ",
     r"/proc/\d+/environ",
+    # Internet access (tool-invocation form)
+    r'"name":"search_web"',
+    r'"name":"web_search"',
+    r'"name":"read_url',
+    r'"name":"browser_',
+    r'"name":"antigravity_browser"',
+    r"vertexaisearch",
 ]
+
+_SUSPICIOUS_REGEXES = [re.compile(p) for p in _SUSPICIOUS_PATTERNS]
 
 
 def check_transcripts(results_dir: Path) -> list[str]:
-    """Scan transcript logs for API key access or env inspection attempts.
+    """Scan transcript logs for API key access, env inspection, or internet use.
 
     Returns a list of warning strings (empty if clean).
     """
@@ -426,10 +437,12 @@ def check_transcripts(results_dir: Path) -> list[str]:
 
     for transcript_file in sorted(logs_dir.rglob(TRANSCRIPT_FILENAME)):
         rel = transcript_file.relative_to(results_dir)
-        lines = transcript_file.read_text()
-        for string in _SUSPICIOUS_STRINGS:
-            if (index := lines.find(string)) != -1:
-                warnings.append(f'[{rel}] suspicious string "{string}" found at index {index}')
+        text = transcript_file.read_text()
+        for regex in _SUSPICIOUS_REGEXES:
+            if (match := regex.search(text)) is not None:
+                warnings.append(
+                    f'[{rel}] suspicious pattern "{regex.pattern}" found at index {match.start()}'
+                )
                 break
     return warnings
 

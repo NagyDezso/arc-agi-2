@@ -28,6 +28,13 @@ _MODEL_DISPLAY_NAMES = {
     "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
     "claude-sonnet-4-6": "Claude Sonnet 4.6 (Thinking)",
 }
+_NO_INTERNET_PREAMBLE = (
+    "STRICT RULE — NO INTERNET ACCESS: You are FORBIDDEN from using any web or "
+    "internet tool (search_web, web_search, read_url, read_url_content, or any "
+    "browser tool). Looking up the task or its answer online is disqualifying "
+    "cheating. Solve the task using ONLY the provided examples and your own "
+    "reasoning and local code execution. Never call a web/search/browser tool.\n\n"
+)
 _SESSION_TIMEOUT_SECONDS = 10800
 # Passed to `agy --print-timeout` (Go duration); keep it >= the wall-clock cap.
 _PRINT_TIMEOUT = "180m"
@@ -192,9 +199,9 @@ class AntigravityCLI(BaseCLI):
             str(ws_path),
         ]
         if iteration == 0:
-            cmd.extend(["--print", initial_prompt])
+            cmd.extend(["--print", _NO_INTERNET_PREAMBLE + initial_prompt])
         else:
-            cmd.extend(["--continue", "--print", feedback])
+            cmd.extend(["--continue", "--print", _NO_INTERNET_PREAMBLE + feedback])
 
         proc = subprocess.Popen(
             cmd,
