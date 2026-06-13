@@ -157,6 +157,7 @@ def load_ground_truth(data_dir: Path) -> dict[str, list[Grid]]:
 def score_submission(
     submission: dict[str, list[dict[str, Grid | None]]],
     ground_truth: dict[str, list[Grid]],
+    restrict_to: set[str] | None = None,
 ) -> tuple[float, int, int]:
     """Score a Kaggle submission against ground truth.
 
@@ -165,6 +166,8 @@ def score_submission(
     per_task_scores: dict[str, float] = {}
 
     for task_id, gt_outputs in ground_truth.items():
+        if restrict_to is not None and task_id not in restrict_to:
+            continue
         if task_id not in submission:
             per_task_scores[task_id] = 0.0
             continue
@@ -556,6 +559,19 @@ def main() -> None:
         logger.info(f"\n{'=' * 60}")
         logger.info(f"ARC-mean score: {arc_mean * 100:.2f}% ({arc_mean * num_scored:.2f}/{num_scored})")
         logger.info(f"Perfect tasks:  {perfect}/{num_scored}")
+
+        # Accuracy on just the submitted subset (tasks that produced results)
+        submitted_ids = set(solver_grids.keys())
+        if submitted_ids:
+            sub_mean, sub_scored, sub_perfect = score_submission(
+                submission, ground_truth, restrict_to=submitted_ids
+            )
+            logger.info(f"{'-' * 60}")
+            logger.info(
+                f"Submitted subset ({sub_scored} task(s)): "
+                f"{sub_mean * 100:.2f}% ({sub_mean * sub_scored:.2f}/{sub_scored})"
+            )
+            logger.info(f"Perfect tasks:  {sub_perfect}/{sub_scored}")
         logger.info(f"{'=' * 60}")
 
     # Cost breakdown

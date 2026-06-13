@@ -17,6 +17,9 @@ from .base import BaseCLI, capture_raw_output_line, find_last_grid, strip_ansi
 _IGNORED_STDERR_SUBSTRINGS = (
     "YOLO mode is enabled. All tool calls will be automatically approved.\n",
     "Loaded cached credentials.\n",
+    "Warning: 256-color support not detected. Using a terminal with at least "
+    "256-color support is recommended for a better visual experience.\n",
+    "Ripgrep is not available. Falling back to GrepTool.\n",
 )
 
 
@@ -25,6 +28,7 @@ class GeminiCLI(BaseCLI):
         self.PRICING = {
             "gemini-3.5-flash": (1.50, 9.00, 0.15),
             "gemini-3-flash-preview": (0.50, 3.00, 0.05),
+            "gemini-3.1-flash-lite": (0.25, 1.50, 0.0),
             "gemini-2.5-flash": (0.30, 2.50, 0.03),
             "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),
             "gemini-2.5-pro": (1.25, 10.00, 0.125),
@@ -61,6 +65,21 @@ class GeminiCLI(BaseCLI):
             indent=2,
         )
         (gemini_dir / "settings.json").write_text(settings)
+        policies_dir = gemini_dir / "policies"
+        policies_dir.mkdir(parents=True, exist_ok=True)
+        (policies_dir / "no-plan-mode.toml").write_text(
+            '[[rule]]\n'
+            'toolName = "enter_plan_mode"\n'
+            'decision = "deny"\n'
+            'priority = 100\n'
+            'denyMessage = "Plan mode is disabled for this run."\n'
+            '\n'
+            '[[rule]]\n'
+            'toolName = "exit_plan_mode"\n'
+            'decision = "deny"\n'
+            'priority = 100\n'
+            'denyMessage = "Plan mode is disabled for this run."\n'
+        )
         # Gemini OAuth initialization
         (gemini_dir / "oauth_creds.json").write_text(
             json.dumps(
