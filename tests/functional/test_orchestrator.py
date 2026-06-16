@@ -27,9 +27,18 @@ from src.orchestrator import (
 
 
 class SequenceSandbox(SandboxRunner):
-    def __init__(self, exceptions: list[BaseException] = [], outputs: list[AgentResultData] = []) -> None:
+    def __init__(
+        self,
+        exceptions: list[BaseException] = [],
+        outputs: list[AgentResultData] = [],
+        by_agent: dict[str, BaseException | AgentResultData] | None = None,
+    ) -> None:
         self._exceptions = list(exceptions)
         self._outputs = list(outputs)
+        # When provided, behaviour is keyed by agent_id so the result is
+        # independent of the (non-deterministic) order in which concurrent
+        # agents acquire the sandbox.
+        self._by_agent = dict(by_agent) if by_agent else None
         self.calls: list[str] = []
         self.current_runs = 0
         self.max_concurrent_runs = 0
@@ -42,9 +51,15 @@ class SequenceSandbox(SandboxRunner):
         self.current_runs += 1
         self.max_concurrent_runs = max(self.max_concurrent_runs, self.current_runs)
         try:
-            if self._exceptions:
+            if self._by_agent is not None:
+                behaviour = self._by_agent[spec.agent_id]
+                if isinstance(behaviour, BaseException):
+                    raise behaviour
+                output = behaviour
+            elif self._exceptions:
                 raise self._exceptions.pop(0)
-            output = self._outputs.pop(0)
+            else:
+                output = self._outputs.pop(0)
             log_dir = spec.log_dir
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / SESSION_LOG_FILENAME).write_text("started\n", encoding="utf-8")
@@ -389,12 +404,13 @@ async def test_process_task_persists_exception_as_agent_error(tmp_path: Path, mo
     run_dir.mkdir()
     args = _make_args(num_agents=2, whole_task=False)
 
-    # First result is an exception (simulates sandbox failure for ens0_t0)
-    # Second result is successful (for ens1_t0)
+    # ens0_t0 fails (sandbox exception), ens1_t0 succeeds. Key behaviour by
+    # agent_id so the outcome does not depend on the order in which the two
+    # concurrent agents happen to acquire the sandbox.
     sandbox = SequenceSandbox(
-        exceptions=[RuntimeError("sandbox exploded")],
-        outputs=[
-            AgentResultData(
+        by_agent={
+            "task_fail_ens0_t0": RuntimeError("sandbox exploded"),
+            "task_fail_ens1_t0": AgentResultData(
                 task_id="task_fail",
                 agent_id="task_fail_ens1_t0",
                 test_index=0,
@@ -407,7 +423,7 @@ async def test_process_task_persists_exception_as_agent_error(tmp_path: Path, mo
                 usage=UsageTotals(input_tokens=11, cached_tokens=1, output_tokens=2),
                 raw_lines=['{"event": "started"}'],
             ),
-        ],
+        },
     )
 
     semaphore = asyncio.Semaphore(1)
