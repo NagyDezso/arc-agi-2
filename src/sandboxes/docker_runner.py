@@ -30,11 +30,11 @@ class DockerRunner(SandboxRunner):
     def _ensure_docker_image(self, root_path: Path, cli_type: str) -> None:
         image_tag = f"arc-solver-{cli_type}:latest"
         logger.info(f"Building Docker image '{image_tag}' ...")
-        dockerfile = f"Dockerfile.{cli_type}"
+        dockerfile = Path("dockerfiles") / f"Dockerfile.{cli_type}"
         client = docker.from_env()
         client.images.build(
             path=str(root_path),
-            dockerfile=str(root_path / dockerfile),
+            dockerfile=dockerfile.as_posix(),
             tag=image_tag,
             rm=True,
         )

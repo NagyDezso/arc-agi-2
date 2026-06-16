@@ -42,7 +42,7 @@ def main(
     cli: str = typer.Option(
         "gemini",
         "--cli",
-        help="CLI to use: opencode, gemini, junie, or antigravity (default: gemini)",
+        help="CLI to use: opencode, gemini, junie, antigravity, or claude (default: gemini)",
     ),
     sandbox: str = typer.Option(
         "docker",

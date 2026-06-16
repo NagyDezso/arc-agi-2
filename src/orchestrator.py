@@ -123,6 +123,7 @@ _REQUIRED_ENVS: dict[str, tuple[str, ...]] = {
     "gemini": ("GEMINI_OAUTH_ACCESS_TOKEN", "GEMINI_OAUTH_REFRESH_TOKEN", "GEMINI_OAUTH_ID_TOKEN"),
     "junie": ("JUNIE_ACCESS_TOKEN", "JUNIE_REFRESH_TOKEN"),
     "antigravity": ("ANTIGRAVITY_OAUTH_REFRESH_TOKEN",),
+    "claude": ("CLAUDE_CODE_OAUTH_TOKEN",),
 }
 
 
@@ -158,6 +159,11 @@ def get_envs(cli_type: str) -> dict[str, str]:
         for key in os.environ:
             if key.startswith("ANTIGRAVITY_"):
                 envs[key] = os.environ[key]
+    elif cli_type == "claude":
+        for key in os.environ:
+            if key.startswith("CLAUDE_CODE_"):
+                envs[key] = os.environ[key]
+        envs.setdefault("IS_SANDBOX", "1")
     return envs
 
 

@@ -22,7 +22,7 @@ training examples, then applies it to the test inputs.
 It started as a fork of Confluence Labs' ARC-AGI-2 solver and has been
 generalized into a unified harness with pluggable CLIs and sandboxes.
 
-**Supported solver CLIs:** `gemini`, `opencode`, `junie`, `antigravity`
+**Supported solver CLIs:** `gemini`, `opencode`, `junie`, `antigravity`, `claude`
 **Supported sandboxes:** `docker` (local), `e2b` (remote)
 
 ## Quick Start
@@ -58,7 +58,7 @@ wall-clock circuit breaker and automatic submission building:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--tasks` | `all` | `all` or comma-separated task IDs |
-| `--cli` | `gemini` | Solver CLI: `gemini`, `opencode`, `junie`, or `antigravity` |
+| `--cli` | `gemini` | Solver CLI: `gemini`, `opencode`, `junie`, `antigravity`, or `claude` |
 | `--sandbox` | `docker` | Execution sandbox: `docker` or `e2b` |
 | `--model` | `gemini-2.5-flash-lite` | Model name passed to the CLI |
 | `--num-agents` | 2 | Agents per test input |
@@ -91,9 +91,9 @@ run-opencode.sh    Full-run wrapper for the OpenCode solver
 src/
   orchestrator.py  Task loading, dispatch, logging, resume logic
   agent_runner.py  Per-agent run loop
-  cli_impl/        CLI adapters: gemini, opencode, junie, antigravity
+  cli_impl/        CLI adapters: gemini, opencode, junie, antigravity, claude
   sandboxes/       Sandbox runners: docker, e2b
-  Dockerfile.*     Container images per CLI
+  dockerfiles/     Container images per CLI (Dockerfile.<cli>)
 data/              ARC-AGI evaluation challenges and solutions
 docs/              Thesis documentation
 tests/             unit / functional / integration tests

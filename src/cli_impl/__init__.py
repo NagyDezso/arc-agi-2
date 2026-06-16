@@ -1,7 +1,8 @@
-"""CLI implementations for opencode, gemini, junie, and antigravity."""
+"""CLI implementations for opencode, gemini, junie, antigravity, and claude."""
 
 from .antigravity import AntigravityCLI
 from .base import BaseCLI
+from .claude_code import ClaudeCodeCLI
 from .gemini import GeminiCLI
 from .junie import JunieCLI
 from .opencode import OpenCodeCLI
@@ -14,6 +15,7 @@ CLI_IMPLS = {
     "gemini": GeminiCLI,
     "junie": JunieCLI,
     "antigravity": AntigravityCLI,
+    "claude": ClaudeCodeCLI,
 }
 
 
