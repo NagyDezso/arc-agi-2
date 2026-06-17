@@ -127,9 +127,14 @@ _REQUIRED_ENVS: dict[str, tuple[str, ...]] = {
 }
 
 
-def check_required_envs(cli_type: str) -> None:
+def check_required_envs(cli_type: str, model: str = "") -> None:
     """Raises if the selected CLI is missing required auth env vars."""
-    missing = [key for key in _REQUIRED_ENVS.get(cli_type, ()) if not os.environ.get(key)]
+    required = _REQUIRED_ENVS.get(cli_type, ())
+    # opencode routes by model prefix: google/* uses the Gemini API key instead
+    # of the Kilo gateway.
+    if cli_type == "opencode" and model.startswith("google/"):
+        required = ("GEMINI_API_KEY",)
+    missing = [key for key in required if not os.environ.get(key)]
     if missing:
         raise ValueError(
             f"Missing required environment variable(s) for --cli {cli_type}: "
@@ -146,6 +151,10 @@ def get_envs(cli_type: str) -> dict[str, str]:
         github_token = os.environ.get("GITHUB_TOKEN")
         if github_token:
             envs["GITHUB_TOKEN"] = github_token
+        # Used by the google/* models (Gemini API, incl. Gemma) inside opencode.
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if gemini_key:
+            envs["GEMINI_API_KEY"] = gemini_key
     elif cli_type == "gemini":
         for key in os.environ:
             if key.startswith("GEMINI_"):
@@ -353,7 +362,7 @@ def _accumulate_existing_scores(
 
 
 async def run_all(args: CliArgs) -> None:
-    check_required_envs(args.cli)
+    check_required_envs(args.cli, args.model)
     task_ids = load_task_ids(args.tasks)
     run_dir = _resolve_run_dir(args)
     if run_dir is None:

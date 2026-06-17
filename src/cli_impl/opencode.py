@@ -23,6 +23,7 @@ class OpenCodeCLI(BaseCLI):
             "kilo/minimax/minimax-m2.5:free": (0.29, 1.20, 0.00),
             "opencode/deepseek-v4-flash-free": (0.10, 0.20, 0.02),
             "opencode/mimo-v2.5-free": (0.14, 0.28, 0.0028),
+            "google/gemma-4-31b-it": (0.12, 0.35, 0.0),
         }
 
     def workspace_extras(self, model: str) -> None:
@@ -30,20 +31,16 @@ class OpenCodeCLI(BaseCLI):
         config_path = Path("/root/.config/opencode/opencode.json")
         auth_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        auth_path.write_text(
-            json.dumps(
-                {
-                    "github-copilot": {
-                        "type": "oauth",
-                        "access": "",
-                        "refresh": os.environ.get("GITHUB_TOKEN", ""),
-                        "expires": 0,
-                    }
-                }
-            ),
-            encoding="utf-8",
-        )
-        model_name = model.split("/", 1)[-1]
+
+        # The model is given as ``provider/model``. The provider prefix selects
+        # which backend opencode talks to and must match a provider id below.
+        provider_id, sep, model_name = model.partition("/")
+        if not sep:
+            provider_id, model_name = "lmstudio", model
+
+        auth, provider = self._provider_config(provider_id, model_name)
+        auth_path.write_text(json.dumps(auth), encoding="utf-8")
+
         config = {
             "$schema": "https://opencode.ai/config.json",
             "agent": {
@@ -66,24 +63,51 @@ class OpenCodeCLI(BaseCLI):
                     },
                 }
             },
-            "provider": {
-                "lmstudio": {
-                    "models": {
-                        model_name: {
-                            "name": model_name,
-                            "limit": {
-                                "context": 60000,
-                                "output": 60000,
-                            },
-                        },
-                    },
-                    "name": "LMStudio (local)",
-                    "npm": "@ai-sdk/openai-compatible",
-                    "options": {"baseURL": "host.docker.internal:4444/v1"},
-                }
-            },
+            "provider": provider,
         }
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+    def _provider_config(self, provider_id: str, model_name: str) -> tuple[dict, dict]:
+        """Returns the (auth.json, provider) pair for the requested provider."""
+        model_entry = {
+            model_name: {
+                "name": model_name,
+                "limit": {"context": 60000, "output": 60000},
+            }
+        }
+        if provider_id == "google":
+            # Google's Gemini API (incl. Gemma models such as google/gemma-4-31b-it),
+            # authenticated with GEMINI_API_KEY forwarded into the container.
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+            auth = {"google": {"type": "api", "key": api_key}}
+            provider = {
+                "google": {
+                    "name": "Google Gemini API",
+                    "npm": "@ai-sdk/google",
+                    "options": {"apiKey": api_key},
+                    "models": model_entry,
+                }
+            }
+            return auth, provider
+
+        # Default: local LMStudio over an OpenAI-compatible endpoint.
+        auth = {
+            "github-copilot": {
+                "type": "oauth",
+                "access": "",
+                "refresh": os.environ.get("GITHUB_TOKEN", ""),
+                "expires": 0,
+            }
+        }
+        provider = {
+            "lmstudio": {
+                "models": model_entry,
+                "name": "LMStudio (local)",
+                "npm": "@ai-sdk/openai-compatible",
+                "options": {"baseURL": "host.docker.internal:4444/v1"},
+            }
+        }
+        return auth, provider
 
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
