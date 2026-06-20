@@ -24,6 +24,7 @@ class CliArgs(BaseModel):
     limit: int | None
     cli: str
     sandbox: str
+    dataset: str
 
 
 class AgentConfig(BaseModel):

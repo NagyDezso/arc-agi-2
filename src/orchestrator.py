@@ -16,6 +16,7 @@ import logging
 import os
 import random
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,8 @@ from src.models import (
 from src.sandboxes import get_sandbox_runner
 
 ROOT = Path(__file__).resolve().parent
-CHALLENGES_FILE = ROOT.parent / "data" / "arc-agi_evaluation_challenges.json"
+DATA_DIR = ROOT.parent / "data"
+DEFAULT_DATASET = "arc-prize-2025/arc-agi_evaluation_challenges.json"
 RESULTS = ROOT.parent / "results"
 SESSION_LOG_FILENAME = "session.log"
 TRANSCRIPT_FILENAME = "transcript.jsonl"
@@ -43,16 +45,33 @@ ATTEMPTS_LOG_FILENAME = "attempts.jsonl"
 
 logger = logging.getLogger(__name__)
 
-_ALL_TASKS: dict[str, dict[str, Any]] = {}
+_active_dataset: Path = DATA_DIR / DEFAULT_DATASET
+
+
+def resolve_dataset_path(dataset: str) -> Path:
+    """Absolute paths as-is; relative paths under data/."""
+    path = Path(dataset).expanduser()
+    if path.is_absolute():
+        return path
+    return DATA_DIR / path
+
+
+def set_dataset(dataset: str) -> Path:
+    global _active_dataset
+    _active_dataset = resolve_dataset_path(dataset)
+    return _active_dataset
+
+
+@lru_cache(maxsize=None)
+def _read_challenges(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        message = f"Challenges file not found: {path}"
+        raise FileNotFoundError(message)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _load_all_tasks() -> dict[str, dict[str, Any]]:
-    if not _ALL_TASKS:
-        if not CHALLENGES_FILE.exists():
-            message = f"Challenges file not found: {CHALLENGES_FILE}"
-            raise FileNotFoundError(message)
-        _ALL_TASKS.update(json.loads(CHALLENGES_FILE.read_text(encoding="utf-8")))
-    return _ALL_TASKS
+    return _read_challenges(_active_dataset)
 
 
 def load_task_ids(tasks_arg: str) -> list[str]:
@@ -363,6 +382,8 @@ def _accumulate_existing_scores(
 
 async def run_all(args: CliArgs) -> None:
     check_required_envs(args.cli, args.model)
+    challenges_file = set_dataset(args.dataset)
+    logger.info(f"Using dataset: {challenges_file}")
     task_ids = load_task_ids(args.tasks)
     run_dir = _resolve_run_dir(args)
     if run_dir is None:

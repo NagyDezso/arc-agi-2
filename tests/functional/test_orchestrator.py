@@ -143,6 +143,7 @@ def _make_args(**overrides: Any) -> CliArgs:
         "name": "testrun",
         "limit": None,
         "concurrency": 2,
+        "dataset": "arc-prize-2025/arc-agi_evaluation_challenges.json",
     }
     base.update(overrides)
     return CliArgs(**base)
@@ -685,6 +686,7 @@ async def test_process_task_integration(tmp_path, mock_raw_task_file, mock_cli_i
         limit=None,
         cli="opencode",
         sandbox="docker",
+        dataset="arc-prize-2025/arc-agi_evaluation_challenges.json",
     )
 
     sandbox_impl = MockSandbox()

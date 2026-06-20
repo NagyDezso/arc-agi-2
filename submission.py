@@ -26,7 +26,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from src.orchestrator import TRANSCRIPT_FILENAME
+from src.orchestrator import TRANSCRIPT_FILENAME, resolve_dataset_path
 
 Grid = list[list[int]]
 
@@ -139,12 +139,8 @@ def load_summary(results_dir: Path) -> dict[str, Any] | None:
 # ── Ground truth loading ──────────────────────────────────────────────────
 
 
-def load_ground_truth(data_dir: Path) -> dict[str, list[Grid]]:
-    """Load ground truth from arc-agi_evaluation_solutions.json.
-
-    Returns: {task_id: [gt_output_for_test_0, gt_output_for_test_1, ...]}
-    """
-    solutions_file = data_dir / "arc-agi_evaluation_solutions.json"
+def load_ground_truth(solutions_file: Path) -> dict[str, list[Grid]]:
+    """Load ground truth solutions: {task_id: [gt_output_for_test_0, ...]}."""
     if not solutions_file.exists():
         logger.warning(f"ground truth not found: {solutions_file}")
         return {}
@@ -502,10 +498,10 @@ def main() -> None:
         help="Path to results directory (default: src/results/latest)",
     )
     parser.add_argument(
-        "--data-dir",
-        type=Path,
-        default=None,
-        help="Path to data directory with ground truth (default: data/ next to script)",
+        "--dataset",
+        type=str,
+        default="arc-prize-2025/arc-agi_evaluation_solutions.json",
+        help="Ground-truth solutions JSON, relative to data/ or an absolute path",
     )
     parser.add_argument(
         "--output",
@@ -522,7 +518,7 @@ def main() -> None:
     )
 
     script_dir = Path(__file__).resolve().parent
-    data_dir = args.data_dir or script_dir / "data"
+    solutions_file = resolve_dataset_path(args.dataset)
 
     # Determine results directory
     if args.results_dir:
@@ -547,7 +543,7 @@ def main() -> None:
     logger.info(f"Loaded {len(solver_grids)} tasks from solver results")
 
     # Load ground truth
-    ground_truth = load_ground_truth(data_dir)
+    ground_truth = load_ground_truth(solutions_file)
 
     # Build submission
     submission = build_submission(solver_grids, ground_truth)

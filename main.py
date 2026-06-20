@@ -49,6 +49,11 @@ def main(
         "--sandbox",
         help="Execution sandbox (docker or e2b, default: docker)",
     ),
+    dataset: str = typer.Option(
+        "arc-prize-2025/arc-agi_evaluation_challenges.json",
+        "--dataset",
+        help="Challenges JSON, relative to data/ or an absolute path",
+    ),
 ) -> None:
     """ARC-AGI CLI Solver - solves ARC-AGI tasks using AI agents."""
     args = CliArgs(
@@ -64,6 +69,7 @@ def main(
         limit=limit,
         cli=cli,
         sandbox=sandbox,
+        dataset=dataset,
     )
     asyncio.run(run_all(args))
 
