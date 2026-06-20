@@ -6,8 +6,6 @@ import shutil
 import subprocess
 import threading
 import time
-import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -18,74 +16,46 @@ from .types import Event, EventType
 
 _CLAUDE_DIR = Path("/root/.claude")
 _SESSION_TIMEOUT_SECONDS = 10800
+_DENIED_NETWORK_TOOLS = [
+    "WebFetch",
+    "WebSearch",
+    "Bash(curl:*)",
+    "Bash(wget:*)",
+    "Bash(nc:*)",
+    "Bash(ncat:*)",
+    "Bash(telnet:*)",
+    "Bash(ssh:*)",
+    "Bash(scp:*)",
+    "Bash(ftp:*)",
+    "Bash(pip install:*)",
+    "Bash(pip3 install:*)",
+    "Bash(npm install:*)",
+    "Bash(npm i:*)",
+    "Bash(git clone:*)",
+    "Bash(git fetch:*)",
+    "Bash(git pull:*)",
+    "Bash(git push:*)",
+]
 # Files an agent writes its answer into are scanned for the final grid.
 _OUTPUT_FILE_KEYWORDS = ("output", "answer", "result", "solution", "submission")
 _WRITE_TOOLS = ("write", "edit", "multiedit")
 
 # --- Session-usage limiter ---------------------------------------------------
-# The Claude subscription "session" limit is the rolling 5-hour usage window. We
-# read it from the OAuth usage endpoint and, before each session, pause until the
-# window resets if usage has reached the threshold — the same wait-for-quota
-# behaviour the antigravity adapter uses.
-_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-_OAUTH_BETA = "oauth-2025-04-20"
-# Stop and wait once the 5-hour session window is this full (0..1). 0 disables.
+_SESSION_LIMIT_ENABLED = os.environ.get("CLAUDE_CODE_SESSION_LIMIT", "1") != "0"
+# Wait proactively once utilization reaches this fraction (0..1); 0 waits only on
+# a hard block.
 _SESSION_LIMIT_THRESHOLD = float(os.environ.get("CLAUDE_CODE_SESSION_LIMIT_THRESHOLD", "0.70"))
-_USAGE_PROBE_TIMEOUT_S = 30
-_RESET_HEADROOM_S = 120  # extra slack on top of the parsed reset window
-_MAX_WAIT_S = 6 * 3600  # cap any single sleep so a bad timestamp can't hang forever
-_MAX_WAIT_CYCLES = 4  # how many reset windows to wait through before giving up
+_BLOCKING_RL_STATUSES = frozenset({"blocked", "rejected", "exceeded", "exhausted"})
+_RESET_HEADROOM_S = 120
+_MAX_WAIT_S = 6 * 3600  # cap a single sleep so a bad timestamp can't hang forever
 
 
-def _oauth_token() -> str | None:
-    """The subscription OAuth bearer: the forwarded env token, else the on-disk
-    credentials the CLI refreshes as it runs."""
-    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
-    if token:
-        return token
+def _seconds_until_epoch(epoch: Any) -> float:
+    """Seconds from now until a Unix-epoch-seconds timestamp (0 if past/invalid)."""
     try:
-        data = json.loads((Path.home() / ".claude" / ".credentials.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    oauth = data.get("claudeAiOauth")
-    return oauth.get("accessToken") if isinstance(oauth, dict) else None
-
-
-def _seconds_until(iso_ts: str | None) -> float:
-    if not iso_ts:
-        return float(_MAX_WAIT_S)
-    try:
-        reset = datetime.fromisoformat(iso_ts)
-    except ValueError:
-        return float(_MAX_WAIT_S)
-    if reset.tzinfo is None:
-        reset = reset.replace(tzinfo=timezone.utc)
-    return max(0.0, (reset - datetime.now(timezone.utc)).total_seconds())
-
-
-def _fetch_session_usage() -> tuple[float, float] | None:
-    """Return ``(utilization_percent, seconds_until_reset)`` for the 5-hour
-    session window, or ``None`` if it can't be read (so callers fail open)."""
-    token = _oauth_token()
-    if not token:
-        return None
-    req = urllib.request.Request(
-        _USAGE_URL,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "anthropic-beta": _OAUTH_BETA,
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_USAGE_PROBE_TIMEOUT_S) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-    five_hour = payload.get("five_hour")
-    if not isinstance(five_hour, dict) or five_hour.get("utilization") is None:
-        return None
-    return float(five_hour["utilization"]), _seconds_until(five_hour.get("resets_at"))
+        return max(0.0, float(epoch) - time.time())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class ClaudeCodeCLI(BaseCLI):
@@ -115,15 +85,19 @@ class ClaudeCodeCLI(BaseCLI):
             "claude-haiku-4-5": (1.00, 5.00, 0.10),
         }
         self._session_id: str | None = None
+        # Latest ``five_hour`` rate_limit_info seen on the CLI stream.
+        self._last_five_hour: dict[str, Any] | None = None
 
     def workspace_extras(self, model: str) -> None:
         _CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
-        # Keep the headless run quiet and self-contained: no auto-update, no
-        # telemetry, no co-author trailer. Auth still comes from the OAuth env var.
+
         (_CLAUDE_DIR / "settings.json").write_text(
             json.dumps(
                 {
                     "includeCoAuthoredBy": False,
+                    "permissions": {
+                        "deny": _DENIED_NETWORK_TOOLS,
+                    },
                     "env": {
                         "DISABLE_AUTOUPDATER": "1",
                         "DISABLE_TELEMETRY": "1",
@@ -143,30 +117,29 @@ class ClaudeCodeCLI(BaseCLI):
         )
 
     def _wait_for_session_capacity(self) -> None:
-        """Block until the 5-hour session window has room, then return.
-
-        If usage is at/above the threshold, sleep until the window resets (plus a
-        little headroom) and re-check. Probe failures fail open: we log and proceed
-        rather than stall the whole run on a transient network/auth hiccup.
-        """
-        if _SESSION_LIMIT_THRESHOLD <= 0:
+        """Sleep until ``resetsAt`` when the latest ``five_hour`` event is blocked or
+        its utilization is at/above the threshold; otherwise return immediately."""
+        if not _SESSION_LIMIT_ENABLED:
             return
+        info = self._last_five_hour
+        if not info:
+            return
+        status = info.get("status")
+        util = info.get("utilization")
         threshold_pct = _SESSION_LIMIT_THRESHOLD * 100
-        for _ in range(_MAX_WAIT_CYCLES):
-            usage = _fetch_session_usage()
-            if usage is None:
-                self._emit_status("session-usage check failed; proceeding without the limit", level="warning")
-                return
-            utilization, reset_s = usage
-            if utilization < threshold_pct:
-                return
-            sleep_s = min(reset_s + _RESET_HEADROOM_S, _MAX_WAIT_S)
-            self._emit_status(
-                f"session usage {utilization:.0f}% >= {threshold_pct:.0f}%; "
-                f"waiting {sleep_s / 60:.0f}m for the 5h window to reset"
-            )
-            time.sleep(sleep_s)
-        self._emit_status("session usage still high after waiting; proceeding", level="warning")
+        over_threshold = threshold_pct > 0 and isinstance(util, (int, float)) and float(util) >= threshold_pct
+        if status not in _BLOCKING_RL_STATUSES and not over_threshold:
+            return
+        reset_s = _seconds_until_epoch(info.get("resetsAt"))
+        self._last_five_hour = None  # consume it; the next session re-evaluates
+        if reset_s <= 0:
+            return
+        sleep_s = min(reset_s + _RESET_HEADROOM_S, _MAX_WAIT_S)
+        reason = f"status={status}" if status in _BLOCKING_RL_STATUSES else f"utilization {float(util):.0f}%"
+        self._emit_status(
+            f"5h session limit reached ({reason}); waiting {sleep_s / 60:.0f}m for the window to reset"
+        )
+        time.sleep(sleep_s)
 
     def run_session(
         self, ws_path: Path, model: str, initial_prompt: str, feedback: str, iteration: int
@@ -225,6 +198,8 @@ class ClaudeCodeCLI(BaseCLI):
         def _reader() -> None:
             try:
                 for line in proc.stdout or []:
+                    if _is_thinking_progress_line(line):
+                        continue
                     line_queue.put(line)
             finally:
                 line_queue.put(None)
@@ -252,6 +227,10 @@ class ClaudeCodeCLI(BaseCLI):
                 turns = obj.get("num_turns")
                 if isinstance(turns, int) and turns > num_turns:
                     num_turns = turns
+            elif evt_type == "rate_limit_event":
+                info = obj.get("rate_limit_info")
+                if isinstance(info, dict) and info.get("rateLimitType") == "five_hour":
+                    self._last_five_hour = info
 
         start_time = time.time()
         while True:
@@ -388,6 +367,10 @@ class ClaudeCodeCLI(BaseCLI):
             nxt = obj.get("for_iteration", "?")
             body = obj.get("text", "")
             rf.write(f"\n\n**Harness feedback** (next session iteration {nxt}):\n```\n{body}\n```\n\n")
+
+
+def _is_thinking_progress_line(line: str) -> bool:
+    return '"subtype":"thinking_tokens"' in line
 
 
 def _tool_result_text(content: Any) -> str:

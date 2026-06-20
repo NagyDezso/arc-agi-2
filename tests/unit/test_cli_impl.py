@@ -1,11 +1,14 @@
 import io
 import json
+import time
 
 import pytest
 
 from src.cli_impl import antigravity as antigravity_mod
+from src.cli_impl import claude_code as claude_code_mod
 from src.cli_impl import get_cli_impl
 from src.cli_impl.antigravity import AntigravityCLI
+from src.cli_impl.claude_code import ClaudeCodeCLI
 from src.cli_impl.gemini import GeminiCLI
 from src.cli_impl.opencode import OpenCodeCLI
 from src.models import UsageTotals
@@ -368,3 +371,68 @@ def test_antigravity_cost_uses_gemini_3_5_flash_pricing():
     usage.cached_tokens = 1_000_000
     # 1.50 input + 9.00 output + 0.15 cached per 1M tokens.
     assert cli.calculate_cost("gemini-3.5-flash", usage) == pytest.approx(10.65)
+
+
+def _claude_with_captured_sleep(monkeypatch):
+    """A ClaudeCodeCLI whose sleeps/emits are captured instead of executed."""
+    cli = ClaudeCodeCLI()
+    slept: list[float] = []
+    emitted: list[str] = []
+    monkeypatch.setattr(claude_code_mod.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(cli, "_emit_status", lambda msg, level="info": emitted.append(msg))
+    monkeypatch.setattr(claude_code_mod, "_SESSION_LIMIT_ENABLED", True)
+    monkeypatch.setattr(claude_code_mod, "_SESSION_LIMIT_THRESHOLD", 0.70)
+    return cli, slept, emitted
+
+
+def test_claude_limiter_proceeds_below_threshold(monkeypatch):
+    cli, slept, _ = _claude_with_captured_sleep(monkeypatch)
+    # No event (first session), plain "allowed", and a warning under 70% all proceed.
+    cli._last_five_hour = None
+    cli._wait_for_session_capacity()
+    cli._last_five_hour = {"status": "allowed", "resetsAt": time.time() + 9999}
+    cli._wait_for_session_capacity()
+    cli._last_five_hour = {"status": "allowed_warning", "utilization": 55.0, "resetsAt": time.time() + 9999}
+    cli._wait_for_session_capacity()
+    assert slept == []
+
+
+def test_claude_limiter_waits_on_warning_over_threshold(monkeypatch):
+    cli, slept, emitted = _claude_with_captured_sleep(monkeypatch)
+    cli._last_five_hour = {"status": "allowed_warning", "utilization": 72.0, "resetsAt": time.time() + 30 * 60}
+    cli._wait_for_session_capacity()
+    assert slept and slept[0] == pytest.approx(30 * 60 + 120, abs=2)
+    assert cli._last_five_hour is None
+    assert "utilization 72%" in emitted[0]
+
+
+def test_claude_limiter_waits_until_reset_then_consumes(monkeypatch):
+    cli, slept, emitted = _claude_with_captured_sleep(monkeypatch)
+    cli._last_five_hour = {"status": "blocked", "resetsAt": time.time() + 40 * 60}
+    cli._wait_for_session_capacity()
+    assert slept and slept[0] == pytest.approx(40 * 60 + 120, abs=2)
+    assert cli._last_five_hour is None
+    assert "5h session limit reached" in emitted[0]
+
+
+def test_claude_limiter_skips_already_expired_window(monkeypatch):
+    cli, slept, _ = _claude_with_captured_sleep(monkeypatch)
+    cli._last_five_hour = {"status": "exhausted", "resetsAt": time.time() - 10}
+    cli._wait_for_session_capacity()
+    assert slept == []
+    assert cli._last_five_hour is None
+
+
+def test_claude_limiter_caps_absurd_reset(monkeypatch):
+    cli, slept, _ = _claude_with_captured_sleep(monkeypatch)
+    cli._last_five_hour = {"status": "rejected", "resetsAt": time.time() + 99 * 3600}
+    cli._wait_for_session_capacity()
+    assert slept[0] == claude_code_mod._MAX_WAIT_S
+
+
+def test_claude_limiter_disabled(monkeypatch):
+    cli, slept, _ = _claude_with_captured_sleep(monkeypatch)
+    monkeypatch.setattr(claude_code_mod, "_SESSION_LIMIT_ENABLED", False)
+    cli._last_five_hour = {"status": "blocked", "resetsAt": time.time() + 40 * 60}
+    cli._wait_for_session_capacity()
+    assert slept == []
