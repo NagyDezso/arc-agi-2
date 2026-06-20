@@ -83,7 +83,7 @@ def load_solver_grids(results_dir: Path) -> dict[str, dict[int, list[Grid]]]:
             task_id = parts[0]
             if task_id not in out:
                 out[task_id] = {}
-            for line in attempts_file.read_text().splitlines():
+            for line in attempts_file.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 try:
@@ -103,7 +103,7 @@ def load_solver_grids(results_dir: Path) -> dict[str, dict[int, list[Grid]]]:
             if task_id in out:
                 continue  # already loaded from logs
             try:
-                data = json.loads(f.read_text())
+                data = json.loads(f.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(f"skipping corrupt {f}: {e}")
                 continue
@@ -133,7 +133,7 @@ def load_summary(results_dir: Path) -> dict[str, Any] | None:
     summary_file = results_dir / "summary.json"
     if not summary_file.exists():
         return None
-    return json.loads(summary_file.read_text())
+    return json.loads(summary_file.read_text(encoding="utf-8"))
 
 
 # ── Ground truth loading ──────────────────────────────────────────────────
@@ -148,7 +148,7 @@ def load_ground_truth(data_dir: Path) -> dict[str, list[Grid]]:
     if not solutions_file.exists():
         logger.warning(f"ground truth not found: {solutions_file}")
         return {}
-    return json.loads(solutions_file.read_text())
+    return json.loads(solutions_file.read_text(encoding="utf-8"))
 
 
 # ── Scoring ───────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ def _aggregate_costs_from_task_results(results_dir: Path) -> dict[str, dict]:
     for f in sorted(task_results_dir.glob("*.json")):
         task_id = f.stem
         try:
-            data = json.loads(f.read_text())
+            data = json.loads(f.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
 
@@ -440,7 +440,7 @@ def check_transcripts(results_dir: Path) -> list[str]:
 
     for transcript_file in sorted(logs_dir.rglob(TRANSCRIPT_FILENAME)):
         rel = transcript_file.relative_to(results_dir)
-        text = transcript_file.read_text()
+        text = transcript_file.read_text(encoding="utf-8")
         for regex in _SUSPICIOUS_REGEXES:
             if (match := regex.search(text)) is not None:
                 warnings.append(

@@ -68,11 +68,11 @@ class E2BRunner(SandboxRunner):
             await sandbox.files.write("/root/config.json", json.dumps(config))
             await sandbox.files.make_dir("/app/src")
             await sandbox.files.make_dir("/app/src/cli_impl")
-            await sandbox.files.write("/app/src/__init__.py", (ROOT / "__init__.py").read_text())
-            await sandbox.files.write("/app/src/agent_runner.py", (ROOT / "agent_runner.py").read_text())
-            await sandbox.files.write("/app/src/models.py", (ROOT / "models.py").read_text())
+            await sandbox.files.write("/app/src/__init__.py", (ROOT / "__init__.py").read_text(encoding="utf-8"))
+            await sandbox.files.write("/app/src/agent_runner.py", (ROOT / "agent_runner.py").read_text(encoding="utf-8"))
+            await sandbox.files.write("/app/src/models.py", (ROOT / "models.py").read_text(encoding="utf-8"))
             for f in (ROOT / "cli_impl").glob("*.py"):
-                await sandbox.files.write(f"/app/src/cli_impl/{f.name}", f.read_text())
+                await sandbox.files.write(f"/app/src/cli_impl/{f.name}", f.read_text(encoding="utf-8"))
 
             session_f = session_log_path.open("a", encoding="utf-8")
             transcript_f = transcript_path.open("a", encoding="utf-8")
