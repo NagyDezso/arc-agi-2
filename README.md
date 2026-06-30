@@ -60,13 +60,20 @@ wall-clock circuit breaker and automatic submission building:
 | `--tasks` | `all` | `all` or comma-separated task IDs |
 | `--cli` | `gemini` | Solver CLI: `gemini`, `opencode`, `junie`, `antigravity`, or `claude` |
 | `--sandbox` | `docker` | Execution sandbox: `docker` or `e2b` |
-| `--model` | `gemini-2.5-flash-lite` | Model name passed to the CLI |
+| `--model` | `gemini-2.5-flash` | Model name passed to the CLI |
+| `--dataset` | `arc-prize-2025/arc-agi_evaluation_challenges.json` | Challenges JSON, relative to `data/` or an absolute path |
 | `--num-agents` | 2 | Agents per test input |
 | `--max-iterations` | 5 | Max refinement loops per agent |
 | `--concurrency` | 2 | Max simultaneous agents |
+| `--limit` | — | Cap the number of tasks to run |
 | `--whole-task` | off | One `transform()` shared across all test inputs |
+| `--soft-training-feedback` | off | Use a softer training-failure message |
 | `--name` | — | Name prefix for the results directory |
 | `--resume` | — | Resume a previous run directory |
+
+The bundled datasets live under `data/arc-prize-2024/` and
+`data/arc-prize-2025/`. Pass `--dataset arc-prize-2024/arc-agi_evaluation_challenges.json`
+to solve the 2024 evaluation set instead of the 2025 default.
 
 Credentials are read from `.env` (see `.env.example`). Each CLI/sandbox needs
 its own keys — e.g. `E2B_API_KEY` for the E2B sandbox, `GEMINI_API_KEY` for the
@@ -77,9 +84,21 @@ Gemini CLI, `KILO_API_KEY` for OpenCode.
 After a run, aggregate the results into a Kaggle-style `submission.json`:
 
 ```bash
-python3 submission.py                    # gemini results
-python3 submission.py --solver opencode  # opencode results
+# Aggregate the most recent run (results/latest) against the 2025 solutions
+python3 submission.py
+
+# Score a specific run directory against a chosen solutions file
+python3 submission.py \
+    --results-dir results/<run-dir> \
+    --dataset arc-prize-2024/arc-agi_evaluation_solutions.json \
+    --output submission.json
 ```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--results-dir` | `results/latest` | Run directory to aggregate |
+| `--dataset` | `arc-prize-2025/arc-agi_evaluation_solutions.json` | Ground-truth solutions JSON, relative to `data/` or an absolute path |
+| `--output` | `submission.json` | Output path for the submission file |
 
 ## Project Layout
 
@@ -94,8 +113,10 @@ src/
   cli_impl/        CLI adapters: gemini, opencode, junie, antigravity, claude
   sandboxes/       Sandbox runners: docker, e2b
   dockerfiles/     Container images per CLI (Dockerfile.<cli>)
-data/              ARC-AGI evaluation challenges and solutions
-docs/              Thesis documentation
+data/
+  arc-prize-2024/  ARC-AGI-1 evaluation challenges and solutions
+  arc-prize-2025/  ARC-AGI-2 evaluation challenges and solutions
+docs/              Documentation
 tests/             unit / functional / integration tests
 ```
 
@@ -112,5 +133,3 @@ uv run pytest
 ## License
 
 MIT — see [LICENSE](LICENSE).
-</content>
-</invoke>
